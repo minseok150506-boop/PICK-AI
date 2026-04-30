@@ -1,0 +1,38 @@
+
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>PICK 회원가입</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+</head>
+<body class="auth-body">
+  <div class="auth-card">
+    <div class="brand">
+      <div class="brand-mark">P</div>
+      <h1>PICK</h1>
+    </div>
+    <p class="muted">첫 번째 가입자는 자동 관리자입니다.</p>
+    <p class="muted">아이디와 비밀번호에는 한글을 사용할 수 없습니다.</p>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="post">
+      <input name="username" placeholder="아이디 (영어/숫자/_/-)" pattern="[A-Za-z0-9_-]+" required>
+      <input name="password" type="password" placeholder="비밀번호 (한글 사용 불가)" pattern="[A-Za-z0-9!@#$%^&*()_\-+=.?]+" required>
+      <button>회원가입</button>
+    </form>
+    <p class="small">이미 계정이 있으신가요? <a href="/login">로그인</a></p>
+  </div>
+<script>
+document.querySelectorAll('input').forEach(input=>{
+  input.addEventListener('input', ()=>{
+    const korean=/[ㄱ-ㅎㅏ-ㅣ가-힣]/g;
+    if(korean.test(input.value)){
+      input.value=input.value.replace(korean,'');
+      alert('아이디와 비밀번호에는 한글을 사용할 수 없습니다.');
+    }
+  });
+});
+</script>
+</body>
+</html>

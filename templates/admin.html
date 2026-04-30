@@ -1,0 +1,47 @@
+
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>PICK 관리자</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-body">
+  <div class="admin-page">
+    <h1>PICK 관리자</h1>
+    <p><a href="/">채팅으로 돌아가기</a> · <a href="/logout">로그아웃</a></p>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>아이디</th><th>권한</th><th>채팅</th><th>메시지</th><th>가입일</th><th>관리</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for u in users %}
+        <tr>
+          <td>{{ u.id }}</td>
+          <td>{{ u.username }}</td>
+          <td>{% if u.is_admin %}<span class="badge admin">관리자</span>{% else %}<span class="badge">일반</span>{% endif %}</td>
+          <td>{{ u.chat_count }}</td>
+          <td>{{ u.message_count }}</td>
+          <td>{{ u.created_at }}</td>
+          <td>
+            {% if u.is_admin %}
+            <form method="post" action="/admin/user/{{ u.id }}/admin">
+              <input type="hidden" name="action" value="revoke">
+              <button class="danger">관리자 해제</button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/user/{{ u.id }}/admin">
+              <input type="hidden" name="action" value="grant">
+              <button>관리자 지정</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

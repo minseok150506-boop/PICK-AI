@@ -1,0 +1,44 @@
+
+*{box-sizing:border-box}
+body{margin:0;background:#070b14;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Arial,sans-serif}
+a{color:#c4b5fd;text-decoration:none}
+
+.auth-body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at top right,#252056,#070b14 50%)}
+.auth-card{width:390px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:24px;padding:28px;box-shadow:0 24px 80px rgba(0,0,0,.38)}
+.brand{display:flex;align-items:center;gap:12px}.brand h1{margin:0;font-size:32px}
+.brand-mark{width:42px;height:42px;border-radius:14px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#6d5dfc,#a78bfa);font-weight:900;font-size:24px}
+.muted{color:rgba(255,255,255,.65);line-height:1.5}.small{font-size:14px;color:rgba(255,255,255,.65)}
+.error{background:rgba(239,68,68,.16);border:1px solid rgba(239,68,68,.35);padding:10px 12px;border-radius:12px;color:#fecaca;margin:12px 0}
+input,textarea{font-family:inherit}
+.auth-card input{width:100%;height:46px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.25);color:#fff;padding:0 14px;margin:8px 0;font-size:15px}
+button{border:0;border-radius:14px;background:linear-gradient(135deg,#6d5dfc,#8b5cf6);color:white;font-weight:900;cursor:pointer}
+.auth-card button{width:100%;height:46px;margin-top:12px}
+
+.app{height:100vh;display:grid;grid-template-columns:290px 1fr;background:linear-gradient(135deg,#070b14,#111827)}
+.sidebar{height:100vh;background:rgba(7,11,20,.92);border-right:1px solid rgba(255,255,255,.1);padding:18px;display:flex;flex-direction:column}
+.side-brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}.side-brand strong{display:block;font-size:20px}.side-brand span{font-size:12px;color:rgba(255,255,255,.55)}
+.new-chat{height:44px;margin-bottom:14px}
+.chat-list{flex:1;overflow:auto}.chat-item{width:100%;height:40px;margin:4px 0;background:rgba(255,255,255,.06);text-align:left;padding:0 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-bottom{border-top:1px solid rgba(255,255,255,.1);padding-top:12px;display:flex;flex-direction:column;gap:8px;color:rgba(255,255,255,.65);font-size:14px}
+
+.main{position:relative;height:100vh;overflow:hidden}
+.topbar{height:62px;border-bottom:1px solid rgba(255,255,255,.09);display:flex;align-items:center;justify-content:space-between;padding:0 26px;background:rgba(7,11,20,.55);backdrop-filter:blur(14px)}
+.topbar strong{display:block;font-size:18px}.topbar span{font-size:12px;color:rgba(255,255,255,.55)}.online{font-size:12px;color:#86efac;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.22);border-radius:999px;padding:7px 12px;font-weight:900}
+.message-area{position:absolute;top:62px;left:0;right:0;bottom:142px;overflow:auto;padding:32px 72px;display:flex;flex-direction:column;gap:16px}
+.msg-row{display:flex;gap:10px;width:100%}.msg-row.user{justify-content:flex-end}.msg-row.assistant{justify-content:flex-start;padding-left:170px}
+.avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#6d5dfc,#a78bfa);font-weight:900;flex:0 0 auto}
+.msg-stack{display:flex;flex-direction:column;gap:4px;max-width:480px}.msg-row.user .msg-stack{align-items:flex-end;max-width:320px}
+.msg-name{font-size:10px;color:rgba(255,255,255,.48);font-weight:900}
+.bubble{padding:10px 13px;border-radius:14px;line-height:1.48;font-size:14.5px;white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere}
+.bubble.assistant{background:rgba(255,255,255,.065);border:1px solid rgba(255,255,255,.1);border-top-left-radius:6px}
+.bubble.user{background:linear-gradient(135deg,#6d5dfc,#8b5cf6);border-bottom-right-radius:6px}
+.msg-time{font-size:11px;color:rgba(255,255,255,.42)}
+
+.composer-shell{position:absolute;left:0;right:0;bottom:0;height:142px;padding:22px 72px 28px;background:linear-gradient(180deg,rgba(7,11,20,0),#070b14 45%)}
+.composer{max-width:900px;margin:0 auto;min-height:82px;background:rgba(34,39,52,.96);border:1px solid rgba(255,255,255,.14);border-radius:24px;padding:14px;display:flex;align-items:flex-end;gap:12px;box-shadow:0 18px 55px rgba(0,0,0,.36)}
+#messageInput{flex:1;min-height:52px;max-height:180px;resize:none;background:transparent;border:0;outline:0;color:white;font-size:15.5px;line-height:1.55}
+#sendBtn{height:44px;min-width:64px}#sendBtn:disabled{opacity:.6;cursor:not-allowed}
+
+.admin-body{background:#0b1020;color:#fff}.admin-page{padding:32px}.admin-page table{width:100%;border-collapse:collapse;background:#111827;border-radius:16px;overflow:hidden}.admin-page th,.admin-page td{padding:14px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}.admin-page th{background:#1f2937}.badge{padding:5px 10px;border-radius:999px;background:#374151;font-weight:900}.badge.admin{background:#6d5dfc}.danger{background:#ef4444}
+
+@media(max-width:900px){.app{grid-template-columns:1fr}.sidebar{display:none}.message-area{padding:24px 18px}.msg-row.assistant{padding-left:0}.composer-shell{padding:18px}.msg-stack,.msg-row.user .msg-stack{max-width:78vw}}
