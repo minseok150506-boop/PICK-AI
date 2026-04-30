@@ -9,6 +9,7 @@
 <body class="admin-body">
   <div class="admin-page">
     <h1>PICK 관리자</h1>
+    <p class="muted">자기 자신의 관리자 권한은 해제하거나 삭제할 수 없습니다.</p>
     <p><a href="/">채팅으로 돌아가기</a> · <a href="/logout">로그아웃</a></p>
     <table>
       <thead>
@@ -35,6 +36,11 @@
             <form method="post" action="/admin/user/{{ u.id }}/admin">
               <input type="hidden" name="action" value="grant">
               <button>관리자 지정</button>
+            </form>
+            {% endif %}
+            {% if not u.is_admin %}
+            <form method="post" action="/admin/user/{{ u.id }}/delete" onsubmit="return confirm('정말 이 유저를 삭제하시겠습니까?');">
+              <button class="danger">유저 삭제</button>
             </form>
             {% endif %}
           </td>

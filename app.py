@@ -1,3 +1,4 @@
+import time
 
 import os
 import re
@@ -15,6 +16,11 @@ DB_PATH = "data/pick.db"
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("PICK_SECRET_KEY", "pick-dev-secret-change-me")
+
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("PICK_COOKIE_SECURE", "1") == "1"
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 
 # -----------------------------
@@ -139,6 +145,45 @@ def local_ai_reply(user_text: str) -> str:
     return f"요청을 확인했습니다. '{t}'에 대해 더 정확히 도와드리려면 원하는 결과를 조금 더 자세히 말씀해 주세요."
 
 
+
+# -----------------------------
+# Security helpers
+# -----------------------------
+LOGIN_ATTEMPTS = {}
+
+def client_ip():
+    return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+
+def too_many_login_attempts(username):
+    key = f"{client_ip()}:{username}"
+    now_ts = time.time()
+    attempts = [t for t in LOGIN_ATTEMPTS.get(key, []) if now_ts - t < 300]
+    LOGIN_ATTEMPTS[key] = attempts
+    return len(attempts) >= 5
+
+def record_login_failure(username):
+    key = f"{client_ip()}:{username}"
+    LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
+
+def clear_login_failures(username):
+    key = f"{client_ip()}:{username}"
+    LOGIN_ATTEMPTS.pop(key, None)
+
+def strong_password(password):
+    if not valid_password(password):
+        return False
+    if len(password) < 8:
+        return False
+    return any(c.isalpha() for c in password) and any(c.isdigit() for c in password)
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
+
 # -----------------------------
 # Auth
 # -----------------------------
@@ -156,13 +201,14 @@ def register():
     if not valid_username(username):
         return render_template("register.html", app_name=APP_NAME, error="아이디는 영어, 숫자, _, - 만 사용할 수 있으며 2~32자여야 합니다.")
 
-    if not valid_password(password):
-        return render_template("register.html", app_name=APP_NAME, error="비밀번호는 영어, 숫자, 일부 특수문자만 사용할 수 있으며 4~64자여야 합니다.")
+    if not strong_password(password):
+        return render_template("register.html", app_name=APP_NAME, error="비밀번호는 영어+숫자를 포함해 8자 이상이어야 하며 한글은 사용할 수 없습니다.")
 
     conn = db()
+    # 첫 번째 가입자만 관리자입니다.
+    # 이후 가입자는 모두 일반 유저입니다.
     user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
-    admin_name = os.environ.get("PICK_ADMIN_USERNAME", "").strip()
-    is_admin = 1 if user_count == 0 or (admin_name and username == admin_name) else 0
+    is_admin = 1 if user_count == 0 else 0
 
     try:
         conn.execute(
@@ -191,13 +237,19 @@ def login():
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "").strip()
 
+    if too_many_login_attempts(username):
+        return render_template("login.html", app_name=APP_NAME, error="로그인 실패가 너무 많습니다. 5분 뒤 다시 시도해 주세요.")
+
     conn = db()
     user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
     conn.close()
 
     if not user or not check_password_hash(user["password_hash"], password):
+        record_login_failure(username)
         return render_template("login.html", app_name=APP_NAME, error="아이디 또는 비밀번호가 올바르지 않습니다.")
 
+    clear_login_failures(username)
+    session.clear()
     session["user_id"] = user["id"]
     session["username"] = user["username"]
     session["is_admin"] = int(user["is_admin"] or 0)
@@ -250,6 +302,7 @@ def set_admin(user_id):
     value = 1 if action == "grant" else 0
 
     if user_id == session.get("user_id") and value == 0:
+        # 자기 자신의 관리자 권한은 해제할 수 없습니다.
         return redirect(url_for("admin"))
 
     conn = db()
@@ -258,6 +311,32 @@ def set_admin(user_id):
     conn.close()
     return redirect(url_for("admin"))
 
+
+
+@app.route("/admin/user/<int:user_id>/delete", methods=["POST"])
+@admin_required
+def delete_user(user_id):
+    if user_id == session.get("user_id"):
+        return redirect(url_for("admin"))
+
+    conn = db()
+    target = conn.execute("SELECT id, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
+    if not target:
+        conn.close()
+        return redirect(url_for("admin"))
+
+    if int(target["is_admin"] or 0) == 1:
+        conn.close()
+        return redirect(url_for("admin"))
+
+    chat_ids = [r["id"] for r in conn.execute("SELECT id FROM chats WHERE user_id=?", (user_id,)).fetchall()]
+    for cid in chat_ids:
+        conn.execute("DELETE FROM messages WHERE chat_id=?", (cid,))
+    conn.execute("DELETE FROM chats WHERE user_id=?", (user_id,))
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
 
 # -----------------------------
 # API
@@ -346,4 +425,4 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
