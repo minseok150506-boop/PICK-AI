@@ -1,18 +1,75 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><title>PICK 로그</title><link rel="stylesheet" href="/static/style.css"></head>
-<body class="admin-body"><div class="admin-page">
-<h1>로그 보기</h1>
-<p><a href="/admin">유저 관리</a> · <a href="/admin/ip">IP 차단</a> · <a href="/">채팅</a></p>
-<h2>로그인 시도 로그</h2>
-<table><thead><tr><th>ID</th><th>아이디</th><th>IP</th><th>성공</th><th>메시지</th><th>시간</th></tr></thead><tbody>
-{% for l in login_logs %}
-<tr><td>{{ l.id }}</td><td>{{ l.username }}</td><td>{{ l.ip }}</td><td>{{ l.success }}</td><td>{{ l.message }}</td><td>{{ l.created_at }}</td></tr>
-{% endfor %}
-</tbody></table>
-<h2>관리자 활동 기록</h2>
-<table><thead><tr><th>ID</th><th>관리자</th><th>행동</th><th>대상</th><th>IP</th><th>시간</th></tr></thead><tbody>
-{% for l in admin_logs %}
-<tr><td>{{ l.id }}</td><td>{{ l.admin_username }}</td><td>{{ l.action }}</td><td>{{ l.target }}</td><td>{{ l.ip }}</td><td>{{ l.created_at }}</td></tr>
-{% endfor %}
-</tbody></table>
-</div></body></html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>PICK 로그</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-dashboard-body">
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <div class="admin-logo">PICK</div>
+    <div class="admin-menu-title">관리자 메뉴</div>
+    <nav class="admin-nav">
+      <a href="/admin">👥 사용자 관리</a>
+      <a href="/admin/ip">🛡️ IP 차단 관리</a>
+      <a class="active" href="/admin/logs">🔒 로그인 시도 로그</a>
+      <a href="/admin/logs">📋 관리자 활동 로그</a>
+      <a href="/">🎮 대시보드</a>
+    </nav>
+  </aside>
+
+  <main class="admin-main">
+    <header class="admin-top">
+      <button class="admin-menu-button">☰</button>
+      <div></div>
+      <div class="admin-account"><span>관리자님</span><a href="/logout">로그아웃</a></div>
+    </header>
+
+    <section class="admin-content">
+      <h1>로그 보기</h1>
+      <p class="admin-subtitle">로그인 시도와 관리자 활동 기록을 확인합니다.</p>
+
+      <section class="admin-grid">
+        <div class="admin-card wide">
+          <div class="card-head"><h2>최근 로그인 시도</h2></div>
+          <table class="admin-table compact">
+            <thead><tr><th>시간</th><th>사용자명</th><th>IP</th><th>결과</th><th>메시지</th></tr></thead>
+            <tbody>
+            {% for l in login_logs %}
+            <tr>
+              <td>{{ l.created_at }}</td>
+              <td>{{ l.username }}</td>
+              <td>{{ l.ip }}</td>
+              <td>{% if l.success %}<span class="badge ok">성공</span>{% else %}<span class="badge blocked">실패</span>{% endif %}</td>
+              <td>{{ l.message }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="admin-card wide">
+          <div class="card-head"><h2>관리자 활동 기록</h2></div>
+          <table class="admin-table compact">
+            <thead><tr><th>시간</th><th>관리자</th><th>행동</th><th>대상</th><th>IP</th></tr></thead>
+            <tbody>
+            {% for l in admin_logs %}
+            <tr>
+              <td>{{ l.created_at }}</td>
+              <td>{{ l.admin_username }}</td>
+              <td>{{ l.action }}</td>
+              <td>{{ l.target }}</td>
+              <td>{{ l.ip }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+    <footer class="admin-footer">© 2024 PICK. All rights reserved.</footer>
+  </main>
+</div>
+</body>
+</html>

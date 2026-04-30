@@ -1,17 +1,66 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><title>PICK IP 차단</title><link rel="stylesheet" href="/static/style.css"></head>
-<body class="admin-body"><div class="admin-page">
-<h1>IP 차단 관리</h1>
-<p><a href="/admin">유저 관리</a> · <a href="/admin/logs">로그 보기</a> · <a href="/">채팅</a></p>
-<form method="post" class="admin-form">
-  <input name="ip" placeholder="차단할 IP" required>
-  <input name="reason" placeholder="사유">
-  <button>IP 차단</button>
-</form>
-<table><thead><tr><th>ID</th><th>IP</th><th>사유</th><th>등록일</th><th>관리</th></tr></thead><tbody>
-{% for ip in ips %}
-<tr><td>{{ ip.id }}</td><td>{{ ip.ip }}</td><td>{{ ip.reason }}</td><td>{{ ip.created_at }}</td>
-<td><form method="post" action="/admin/ip/{{ ip.id }}/delete"><button class="danger">차단 해제</button></form></td></tr>
-{% endfor %}
-</tbody></table>
-</div></body></html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>PICK IP 차단 관리</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-dashboard-body">
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <div class="admin-logo">PICK</div>
+    <div class="admin-menu-title">관리자 메뉴</div>
+    <nav class="admin-nav">
+      <a href="/admin">👥 사용자 관리</a>
+      <a class="active" href="/admin/ip">🛡️ IP 차단 관리</a>
+      <a href="/admin/logs">🔒 로그인 시도 로그</a>
+      <a href="/admin/logs">📋 관리자 활동 로그</a>
+      <a href="/">🎮 대시보드</a>
+    </nav>
+  </aside>
+
+  <main class="admin-main">
+    <header class="admin-top">
+      <button class="admin-menu-button">☰</button>
+      <div></div>
+      <div class="admin-account"><span>관리자님</span><a href="/logout">로그아웃</a></div>
+    </header>
+
+    <section class="admin-content">
+      <h1>IP 차단 관리</h1>
+      <p class="admin-subtitle">접속을 제한할 IP를 등록하거나 해제합니다.</p>
+
+      <section class="admin-panel">
+        <form method="post" class="admin-form">
+          <input name="ip" placeholder="차단할 IP" required>
+          <input name="reason" placeholder="차단 사유">
+          <button>+ IP 차단 추가</button>
+        </form>
+
+        <table class="admin-table">
+          <thead>
+          <tr><th>ID</th><th>차단된 IP</th><th>사유</th><th>차단일</th><th>관리</th></tr>
+          </thead>
+          <tbody>
+          {% for ip in ips %}
+          <tr>
+            <td>{{ ip.id }}</td>
+            <td>{{ ip.ip }}</td>
+            <td>{{ ip.reason }}</td>
+            <td>{{ ip.created_at }}</td>
+            <td>
+              <form method="post" action="/admin/ip/{{ ip.id }}/delete">
+                <button class="red">차단 해제</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </section>
+    <footer class="admin-footer">© 2024 PICK. All rights reserved.</footer>
+  </main>
+</div>
+</body>
+</html>
