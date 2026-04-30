@@ -42,3 +42,5 @@ button{border:0;border-radius:14px;background:linear-gradient(135deg,#6d5dfc,#8b
 .admin-body{background:#0b1020;color:#fff}.admin-page{padding:32px}.admin-page table{width:100%;border-collapse:collapse;background:#111827;border-radius:16px;overflow:hidden}.admin-page th,.admin-page td{padding:14px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}.admin-page th{background:#1f2937}.badge{padding:5px 10px;border-radius:999px;background:#374151;font-weight:900}.badge.admin{background:#6d5dfc}.danger{background:#ef4444}
 
 @media(max-width:900px){.app{grid-template-columns:1fr}.sidebar{display:none}.message-area{padding:24px 18px}.msg-row.assistant{padding-left:0}.composer-shell{padding:18px}.msg-stack,.msg-row.user .msg-stack{max-width:78vw}}
+
+.badge.blocked{background:#ef4444}.badge.ok{background:#16a34a}.admin-form{display:flex;gap:10px;margin:16px 0}.admin-form input{height:40px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:#111827;color:white;padding:0 12px}

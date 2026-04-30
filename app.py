@@ -47,6 +47,44 @@ def init_db():
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         is_admin INTEGER DEFAULT 0,
+        is_blocked INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+    )
+    """)
+
+
+    cols = [r["name"] for r in cur.execute("PRAGMA table_info(users)").fetchall()]
+    if "is_blocked" not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS blocked_ips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT UNIQUE NOT NULL,
+        reason TEXT,
+        created_at TEXT NOT NULL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS login_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        ip TEXT NOT NULL,
+        success INTEGER NOT NULL,
+        message TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS admin_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        admin_id INTEGER,
+        admin_username TEXT,
+        action TEXT NOT NULL,
+        target TEXT,
+        ip TEXT NOT NULL,
         created_at TEXT NOT NULL
     )
     """)
@@ -99,6 +137,9 @@ def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
+            return redirect(url_for("login"))
+        if is_user_blocked(session.get("user_id")):
+            session.clear()
             return redirect(url_for("login"))
         return fn(*args, **kwargs)
     return wrapper
@@ -178,6 +219,82 @@ def strong_password(password):
 
 @app.after_request
 def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    return response
+
+
+# -----------------------------
+# Security / audit helpers
+# -----------------------------
+LOGIN_ATTEMPTS = {}
+
+def client_ip():
+    return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+
+def is_ip_blocked(ip=None):
+    ip = ip or client_ip()
+    conn = db()
+    row = conn.execute("SELECT id FROM blocked_ips WHERE ip=?", (ip,)).fetchone()
+    conn.close()
+    return row is not None
+
+def log_login(username, success, message):
+    conn = db()
+    conn.execute(
+        "INSERT INTO login_logs(username, ip, success, message, created_at) VALUES (?, ?, ?, ?, ?)",
+        (username, client_ip(), 1 if success else 0, message, now())
+    )
+    conn.commit()
+    conn.close()
+
+def log_admin(action, target=""):
+    try:
+        conn = db()
+        conn.execute(
+            "INSERT INTO admin_logs(admin_id, admin_username, action, target, ip, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (session.get("user_id"), session.get("username"), action, str(target), client_ip(), now())
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def is_user_blocked(user_id):
+    try:
+        conn = db()
+        row = conn.execute("SELECT is_blocked FROM users WHERE id=?", (user_id,)).fetchone()
+        conn.close()
+        return bool(row and int(row["is_blocked"] or 0) == 1)
+    except Exception:
+        return False
+
+def too_many_login_attempts(username):
+    key = f"{client_ip()}:{username}"
+    now_ts = time.time()
+    attempts = [t for t in LOGIN_ATTEMPTS.get(key, []) if now_ts - t < 300]
+    LOGIN_ATTEMPTS[key] = attempts
+    return len(attempts) >= 5
+
+def record_login_failure(username):
+    key = f"{client_ip()}:{username}"
+    LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
+
+def clear_login_failures(username):
+    key = f"{client_ip()}:{username}"
+    LOGIN_ATTEMPTS.pop(key, None)
+
+@app.before_request
+def block_bad_ip():
+    if request.endpoint in {"static"}:
+        return
+    if is_ip_blocked():
+        return "차단된 IP입니다.", 403
+
+@app.after_request
+def security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -282,7 +399,7 @@ def admin():
     conn = db()
     users = conn.execute("""
         SELECT 
-            u.id, u.username, u.is_admin, u.created_at,
+            u.id, u.username, u.is_admin, u.is_blocked, u.created_at,
             COUNT(DISTINCT c.id) AS chat_count,
             COUNT(m.id) AS message_count
         FROM users u
@@ -309,6 +426,7 @@ def set_admin(user_id):
     conn.execute("UPDATE users SET is_admin=? WHERE id=?", (value, user_id))
     conn.commit()
     conn.close()
+    log_admin("admin_grant" if value else "admin_revoke", f"user_id={user_id}")
     return redirect(url_for("admin"))
 
 
@@ -337,6 +455,71 @@ def delete_user(user_id):
     conn.commit()
     conn.close()
     return redirect(url_for("admin"))
+
+
+@app.route("/admin/user/<int:user_id>/block", methods=["POST"])
+@admin_required
+def block_user(user_id):
+    action = request.form.get("action")
+    value = 1 if action == "block" else 0
+
+    if user_id == session.get("user_id"):
+        return redirect(url_for("admin"))
+
+    conn = db()
+    target = conn.execute("SELECT id, username, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
+    if not target:
+        conn.close()
+        return redirect(url_for("admin"))
+
+    if int(target["is_admin"] or 0) == 1:
+        conn.close()
+        return redirect(url_for("admin"))
+
+    conn.execute("UPDATE users SET is_blocked=? WHERE id=?", (value, user_id))
+    conn.commit()
+    conn.close()
+    log_admin("user_block" if value else "user_unblock", target["username"])
+    return redirect(url_for("admin"))
+
+@app.route("/admin/ip", methods=["GET", "POST"])
+@admin_required
+def admin_ip():
+    conn = db()
+    if request.method == "POST":
+        ip = request.form.get("ip", "").strip()
+        reason = request.form.get("reason", "").strip()
+        if ip:
+            conn.execute(
+                "INSERT OR IGNORE INTO blocked_ips(ip, reason, created_at) VALUES (?, ?, ?)",
+                (ip, reason, now())
+            )
+            conn.commit()
+            log_admin("ip_block", ip)
+    ips = conn.execute("SELECT * FROM blocked_ips ORDER BY id DESC").fetchall()
+    conn.close()
+    return render_template("admin_ip.html", app_name=APP_NAME, ips=ips)
+
+@app.route("/admin/ip/<int:ip_id>/delete", methods=["POST"])
+@admin_required
+def admin_ip_delete(ip_id):
+    conn = db()
+    row = conn.execute("SELECT ip FROM blocked_ips WHERE id=?", (ip_id,)).fetchone()
+    conn.execute("DELETE FROM blocked_ips WHERE id=?", (ip_id,))
+    conn.commit()
+    conn.close()
+    if row:
+        log_admin("ip_unblock", row["ip"])
+    return redirect(url_for("admin_ip"))
+
+@app.route("/admin/logs")
+@admin_required
+def admin_logs():
+    conn = db()
+    login_logs = conn.execute("SELECT * FROM login_logs ORDER BY id DESC LIMIT 100").fetchall()
+    admin_logs = conn.execute("SELECT * FROM admin_logs ORDER BY id DESC LIMIT 100").fetchall()
+    conn.close()
+    return render_template("admin_logs.html", app_name=APP_NAME, login_logs=login_logs, admin_logs=admin_logs)
 
 # -----------------------------
 # API

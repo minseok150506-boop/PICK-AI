@@ -10,11 +10,11 @@
   <div class="admin-page">
     <h1>PICK 관리자</h1>
     <p class="muted">자기 자신의 관리자 권한은 해제하거나 삭제할 수 없습니다.</p>
-    <p><a href="/">채팅으로 돌아가기</a> · <a href="/logout">로그아웃</a></p>
+    <p><a href="/">채팅으로 돌아가기</a> · <a href="/admin/ip">IP 차단</a> · <a href="/admin/logs">로그 보기</a> · <a href="/logout">로그아웃</a></p>
     <table>
       <thead>
         <tr>
-          <th>ID</th><th>아이디</th><th>권한</th><th>채팅</th><th>메시지</th><th>가입일</th><th>관리</th>
+          <th>ID</th><th>아이디</th><th>권한</th><th>상태</th><th>채팅</th><th>메시지</th><th>가입일</th><th>관리</th>
         </tr>
       </thead>
       <tbody>
@@ -23,6 +23,7 @@
           <td>{{ u.id }}</td>
           <td>{{ u.username }}</td>
           <td>{% if u.is_admin %}<span class="badge admin">관리자</span>{% else %}<span class="badge">일반</span>{% endif %}</td>
+          <td>{% if u.is_blocked %}<span class="badge blocked">차단됨</span>{% else %}<span class="badge ok">정상</span>{% endif %}</td>
           <td>{{ u.chat_count }}</td>
           <td>{{ u.message_count }}</td>
           <td>{{ u.created_at }}</td>
@@ -42,6 +43,19 @@
             <form method="post" action="/admin/user/{{ u.id }}/delete" onsubmit="return confirm('정말 이 유저를 삭제하시겠습니까?');">
               <button class="danger">유저 삭제</button>
             </form>
+            {% endif %}
+            {% if not u.is_admin %}
+              {% if u.is_blocked %}
+              <form method="post" action="/admin/user/{{ u.id }}/block" style="display:inline">
+                <input type="hidden" name="action" value="unblock">
+                <button>차단 해제</button>
+              </form>
+              {% else %}
+              <form method="post" action="/admin/user/{{ u.id }}/block" style="display:inline">
+                <input type="hidden" name="action" value="block">
+                <button class="danger">유저 차단</button>
+              </form>
+              {% endif %}
             {% endif %}
           </td>
         </tr>
