@@ -319,3 +319,37 @@ button.danger{background:#dc2626}
   .admin-content{padding:22px 14px}
   .admin-table{font-size:12px}
 }
+
+
+/* ===== Message edit/delete controls ===== */
+.message-tools{
+  display:flex;
+  gap:6px;
+  margin-top:8px;
+  opacity:.75;
+}
+.message-tools button{
+  border:1px solid rgba(255,255,255,.16);
+  background:rgba(255,255,255,.08);
+  color:white;
+  border-radius:7px;
+  padding:4px 8px;
+  font-size:11px;
+  font-weight:800;
+  cursor:pointer;
+}
+.message-tools button:hover{
+  background:rgba(255,255,255,.18);
+}
+.admin-account a{
+  white-space:nowrap;
+}
+button.red,.red{
+  background:#dc2626 !important;
+  color:white !important;
+  border:0;
+  border-radius:8px;
+  padding:10px 14px;
+  font-weight:900;
+  cursor:pointer;
+}

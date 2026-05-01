@@ -14,7 +14,7 @@
       <a href="/admin">👥 사용자 관리</a>
       <a href="/admin/ip">🛡️ IP 차단 관리</a>
       <a class="active" href="/admin/logs">🔒 로그인 시도 로그</a>
-      <a href="/admin/logs">📋 관리자 활동 로그</a>
+      
       <a href="/">🎮 대시보드</a>
     </nav>
   </aside>
@@ -23,12 +23,12 @@
     <header class="admin-top">
       <button class="admin-menu-button">☰</button>
       <div></div>
-      <div class="admin-account"><span>관리자님</span><a href="/logout">로그아웃</a></div>
+      <div class="admin-account"><span>{{ session.get("username") }}</span><a href="/logout">로그아웃</a><a href="/">관리자 메뉴 닫기</a></div>
     </header>
 
     <section class="admin-content">
-      <h1>로그 보기</h1>
-      <p class="admin-subtitle">로그인 시도와 관리자 활동 기록을 확인합니다.</p>
+      <h1>로그인 시도 로그</h1>
+      <p class="admin-subtitle">로그인 시도와 로그인 시도 기록을 확인합니다.</p>
 
       <section class="admin-grid">
         <div class="admin-card wide">
@@ -50,21 +50,7 @@
         </div>
 
         <div class="admin-card wide">
-          <div class="card-head"><h2>관리자 활동 기록</h2></div>
-          <table class="admin-table compact">
-            <thead><tr><th>시간</th><th>관리자</th><th>행동</th><th>대상</th><th>IP</th></tr></thead>
-            <tbody>
-            {% for l in admin_logs %}
-            <tr>
-              <td>{{ l.created_at }}</td>
-              <td>{{ l.admin_username }}</td>
-              <td>{{ l.action }}</td>
-              <td>{{ l.target }}</td>
-              <td>{{ l.ip }}</td>
-            </tr>
-            {% endfor %}
-            </tbody>
-          </table>
+          <div class="card-head">
         </div>
       </section>
     </section>

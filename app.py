@@ -531,6 +531,73 @@ def admin_logs():
     conn.close()
     return render_template("admin_logs.html", app_name=APP_NAME, login_logs=login_logs, admin_logs=admin_logs)
 
+
+def get_message_owner(message_id):
+    conn = db()
+    row = conn.execute("""
+        SELECT m.id, m.chat_id, m.role, m.content, c.user_id
+        FROM messages m
+        JOIN chats c ON c.id = m.chat_id
+        WHERE m.id=?
+    """, (message_id,)).fetchone()
+    conn.close()
+    return row
+
+
+@app.route("/api/messages/<int:message_id>/delete", methods=["POST"])
+@login_required
+def api_delete_message(message_id):
+    row = get_message_owner(message_id)
+    if not row:
+        return jsonify({"ok": False, "error": "메시지가 없습니다."}), 404
+
+    # 자기 채팅의 메시지만 삭제 가능
+    if row["user_id"] != session.get("user_id"):
+        return jsonify({"ok": False, "error": "권한이 없습니다."}), 403
+
+    conn = db()
+    conn.execute("DELETE FROM messages WHERE id=?", (message_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/messages/<int:message_id>/edit", methods=["POST"])
+@login_required
+def api_edit_message(message_id):
+    new_content = request.form.get("content", "").strip()
+    if not new_content:
+        return jsonify({"ok": False, "error": "내용이 비어 있습니다."}), 400
+
+    row = get_message_owner(message_id)
+    if not row:
+        return jsonify({"ok": False, "error": "메시지가 없습니다."}), 404
+
+    # 자기 채팅의 메시지만 수정 가능
+    if row["user_id"] != session.get("user_id"):
+        return jsonify({"ok": False, "error": "권한이 없습니다."}), 403
+
+    # 사용자 메시지만 수정 가능. AI 답변 수정은 막음.
+    if row["role"] != "user":
+        return jsonify({"ok": False, "error": "사용자 메시지만 수정할 수 있습니다."}), 403
+
+    conn = db()
+    conn.execute("UPDATE messages SET content=? WHERE id=?", (new_content, message_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "content": new_content})
+
+
+@app.route("/admin/messages/clear", methods=["POST"])
+@admin_required
+def admin_clear_all_messages():
+    conn = db()
+    conn.execute("DELETE FROM messages")
+    conn.execute("DELETE FROM chats")
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
+
 # -----------------------------
 # API
 # -----------------------------
@@ -571,7 +638,7 @@ def api_messages(chat_id):
         return jsonify({"ok": False, "error": "권한이 없습니다."}), 403
 
     rows = conn.execute(
-        "SELECT role, content, created_at FROM messages WHERE chat_id=? ORDER BY id ASC",
+        "SELECT id, role, content, created_at FROM messages WHERE chat_id=? ORDER BY id ASC",
         (chat_id,)
     ).fetchall()
     conn.close()

@@ -129,3 +129,76 @@ window.addEventListener('load', async ()=>{
   addMessage('assistant', '안녕하세요. 저는 PICK입니다. 무엇을 도와드릴까요?');
   qs('messageInput').focus();
 });
+
+
+
+/* ===== PICK message edit/delete final override ===== */
+function addMessage(role, text, id=null){
+  const area = qs('messageArea');
+  const row = document.createElement('div');
+  row.className = 'msg-row ' + role;
+  row.dataset.messageId = id || '';
+  const isUser = role === 'user';
+  row.innerHTML = `
+    ${role === 'assistant' ? '<div class="avatar">P</div>' : ''}
+    <div class="msg-stack">
+      <div class="msg-name">${isUser ? '나' : 'PICK'}</div>
+      <div class="bubble ${role}">
+        <span class="message-text"></span>
+        ${id ? `<div class="message-tools">
+          ${isUser ? `<button onclick="editMessage(${id})">수정</button>` : ''}
+          <button onclick="deleteMessage(${id})">삭제</button>
+        </div>` : ''}
+      </div>
+      <div class="msg-time">${timeNow()}</div>
+    </div>
+  `;
+  row.querySelector('.message-text').textContent = fixPick(text);
+  area.appendChild(row);
+  area.scrollTop = area.scrollHeight;
+  return row.querySelector('.message-text');
+}
+
+async function openChat(id){
+  currentChatId = id;
+  qs('messageArea').innerHTML = '';
+  const res = await fetch(`/api/chats/${id}/messages`);
+  const data = await res.json();
+  data.messages.forEach(m=>addMessage(m.role === 'assistant' ? 'assistant' : 'user', m.content, m.id));
+}
+
+async function deleteMessage(id){
+  if(!confirm('이 메시지를 삭제하시겠습니까?')) return;
+  const res = await fetch(`/api/messages/${id}/delete`, {method:'POST'});
+  const data = await res.json();
+  if(!data.ok){
+    alert(data.error || '삭제 실패');
+    return;
+  }
+  const row = document.querySelector(`[data-message-id="${id}"]`);
+  if(row) row.remove();
+}
+
+async function editMessage(id){
+  const row = document.querySelector(`[data-message-id="${id}"]`);
+  if(!row) return;
+  const span = row.querySelector('.message-text');
+  const oldText = span.textContent;
+  const next = prompt('메시지를 수정하세요.', oldText);
+  if(next === null) return;
+  const content = next.trim();
+  if(!content){
+    alert('내용이 비어 있습니다.');
+    return;
+  }
+
+  const form = new FormData();
+  form.append('content', content);
+  const res = await fetch(`/api/messages/${id}/edit`, {method:'POST', body:form});
+  const data = await res.json();
+  if(!data.ok){
+    alert(data.error || '수정 실패');
+    return;
+  }
+  span.textContent = data.content;
+}

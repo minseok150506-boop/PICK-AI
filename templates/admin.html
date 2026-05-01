@@ -14,7 +14,7 @@
       <a class="active" href="/admin">👥 사용자 관리</a>
       <a href="/admin/ip">🛡️ IP 차단 관리</a>
       <a href="/admin/logs">🔒 로그인 시도 로그</a>
-      <a href="/admin/logs">📋 관리자 활동 로그</a>
+      
       <a href="/">🎮 대시보드</a>
     </nav>
   </aside>
@@ -24,14 +24,18 @@
       <button class="admin-menu-button">☰</button>
       <div></div>
       <div class="admin-account">
-        <span>관리자님</span>
+        <span>{{ session.get("username") }}</span>
         <a href="/logout">로그아웃</a>
+        <a href="/">관리자 메뉴 닫기</a>
       </div>
     </header>
 
     <section class="admin-content">
       <h1>사용자 관리</h1>
       <p class="admin-subtitle">회원 목록 및 차단 관리</p>
+      <form method="post" action="/admin/messages/clear" onsubmit="return confirm('정말 전체 채팅과 메시지를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.');" style="margin:0 0 16px;">
+        <button class="red" type="submit">관리자 전체 채팅/메시지 삭제</button>
+      </form>
 
       <section class="admin-panel">
         <div class="admin-panel-head">
@@ -101,25 +105,6 @@
         </table>
       </section>
 
-      <section class="admin-grid">
-        <div class="admin-card">
-          <div class="card-head">
-            <h2>IP 차단 관리</h2>
-            <a href="/admin/ip">전체 보기</a>
-          </div>
-          <p class="admin-muted">IP 차단 목록과 추가 관리는 IP 차단 관리에서 할 수 있습니다.</p>
-          <a class="primary-link" href="/admin/ip">+ IP 차단 추가</a>
-        </div>
-
-        <div class="admin-card">
-          <div class="card-head">
-            <h2>최근 로그인 시도</h2>
-            <a href="/admin/logs">전체 보기</a>
-          </div>
-          <p class="admin-muted">로그인 성공/실패 기록과 관리자 활동 기록을 확인합니다.</p>
-          <a class="primary-link" href="/admin/logs">로그 보기</a>
-        </div>
-      </section>
     </section>
 
     <footer class="admin-footer">© 2024 PICK. All rights reserved.</footer>
