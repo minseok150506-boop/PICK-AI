@@ -12,6 +12,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 APP_NAME = "PICK"
+OWNER_ADMIN_USERNAME = "minseok"
+OWNER_ADMIN_PASSWORD = "kms0506a!"
 DB_PATH = "data/pick.db"
 
 app = Flask(__name__)
@@ -322,10 +324,9 @@ def register():
         return render_template("register.html", app_name=APP_NAME, error="비밀번호는 영어+숫자를 포함해 8자 이상이어야 하며 한글은 사용할 수 없습니다.")
 
     conn = db()
-    # 첫 번째 가입자만 관리자입니다.
-    # 이후 가입자는 모두 일반 유저입니다.
-    user_count = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
-    is_admin = 1 if user_count == 0 else 0
+    # 고정 관리자 계정만 관리자입니다.
+    # 아이디 minseok + 비밀번호 kms0506a! 조합만 관리자입니다.
+    is_admin = 1 if (username == OWNER_ADMIN_USERNAME and password == OWNER_ADMIN_PASSWORD) else 0
 
     try:
         conn.execute(
@@ -364,6 +365,15 @@ def login():
     if not user or not check_password_hash(user["password_hash"], password):
         record_login_failure(username)
         return render_template("login.html", app_name=APP_NAME, error="아이디 또는 비밀번호가 올바르지 않습니다.")
+
+    # 고정 관리자 계정은 로그인 시 관리자 권한을 보정합니다.
+    if username == OWNER_ADMIN_USERNAME and password == OWNER_ADMIN_PASSWORD and int(user["is_admin"] or 0) != 1:
+        conn = db()
+        conn.execute("UPDATE users SET is_admin=1 WHERE id=?", (user["id"],))
+        conn.commit()
+        conn.close()
+        user = dict(user)
+        user["is_admin"] = 1
 
     clear_login_failures(username)
     session.clear()

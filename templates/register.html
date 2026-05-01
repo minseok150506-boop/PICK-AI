@@ -13,12 +13,13 @@
       <div class="brand-mark">P</div>
       <h1>PICK</h1>
     </div>
+    <p class="muted">회원가입 후 바로 이용할 수 있습니다. 이후 관리자는 관리자 페이지에서만 지정할 수 있습니다.</p>
     <p class="muted">아이디와 비밀번호에는 한글을 사용할 수 없습니다.</p>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
     <form method="post">
       <input name="username" placeholder="아이디 (영어/숫자/_/-)" pattern="[A-Za-z0-9_-]+" required>
       <input name="password" type="password" placeholder="비밀번호 (영어+숫자 8자 이상)" pattern="[A-Za-z0-9!@#$%^&*()_\-+=.?]+" required>
-      <button>회원가입</button>
+<button>회원가입</button>
     </form>
     <p class="small">이미 계정이 있으신가요? <a href="/login">로그인</a></p>
   </div>
