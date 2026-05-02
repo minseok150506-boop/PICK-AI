@@ -217,14 +217,29 @@ def valid_password(password: str) -> bool:
     return re.fullmatch(r"[A-Za-z0-9!@#$%^&*()_\-+=.?]{4,64}", password or "") is not None
 
 
+
+def is_user_blocked(user_id):
+    """차단 유저 확인. 함수가 없어서 / 접속 시 500이 나던 문제를 고칩니다."""
+    if not user_id:
+        return False
+    try:
+        conn = db()
+        row = conn.execute("SELECT is_blocked FROM users WHERE id=?", (user_id,)).fetchone()
+        conn.close()
+        return bool(row and int(row["is_blocked"] or 0) == 1)
+    except Exception:
+        return False
+
 def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
             return redirect(url_for("login"))
+
         if is_user_blocked(session.get("user_id")):
             session.clear()
             return redirect(url_for("login"))
+
         return fn(*args, **kwargs)
     return wrapper
 
@@ -234,8 +249,14 @@ def admin_required(fn):
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
             return redirect(url_for("login"))
+
+        if is_user_blocked(session.get("user_id")):
+            session.clear()
+            return redirect(url_for("login"))
+
         if int(session.get("is_admin") or 0) != 1:
             return render_template("denied.html"), 403
+
         return fn(*args, **kwargs)
     return wrapper
 
@@ -889,3 +910,8 @@ def health():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
+
+@app.route("/healthz")
+def healthz():
+    return {"ok": True, "service": "PICK"}
