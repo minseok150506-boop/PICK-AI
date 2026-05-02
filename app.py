@@ -3,6 +3,8 @@ import time
 import os
 import re
 import sqlite3
+import psycopg2
+import psycopg2.extras
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -15,6 +17,8 @@ APP_NAME = "PICK"
 OWNER_ADMIN_USERNAME = "minseok"
 OWNER_ADMIN_PASSWORD = "kms0506a!"
 DB_PATH = "data/pick.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+IS_POSTGRES = bool(DATABASE_URL)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("PICK_SECRET_KEY", "pick-dev-secret-change-me")
@@ -28,12 +32,86 @@ app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 # -----------------------------
 # DB
 # -----------------------------
+
+class PgConn:
+    def __init__(self, url):
+        self.conn = psycopg2.connect(url, cursor_factory=psycopg2.extras.RealDictCursor)
+
+    def execute(self, sql, params=()):
+        cur = self.conn.cursor()
+        sql = q(sql)
+        cur.execute(sql, params)
+        return cur
+
+    def cursor(self):
+        return PgCursor(self)
+
+    def commit(self):
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+
+class PgCursor:
+    def __init__(self, pgconn):
+        self.pgconn = pgconn
+        self.lastrowid = None
+        self._cur = None
+
+    def execute(self, sql, params=()):
+        self._cur = self.pgconn.execute(sql, params)
+        try:
+            if "INSERT INTO" in sql.upper():
+                # Not used for PostgreSQL lastrowid except when RETURNING is appended by caller.
+                pass
+        except Exception:
+            pass
+        return self
+
+    def fetchone(self):
+        return self._cur.fetchone() if self._cur else None
+
+    def fetchall(self):
+        return self._cur.fetchall() if self._cur else []
+
 def db():
+    if IS_POSTGRES:
+        return PgConn(DATABASE_URL)
+
     Path("data").mkdir(exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+
+def q(sql: str) -> str:
+    """SQLite/PostgreSQL 호환 SQL로 변환합니다."""
+    if IS_POSTGRES:
+        sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+        sql = sql.replace("?", "%s")
+    return sql
+
+
+def fetch_value(row, key, index=0):
+    if row is None:
+        return None
+    try:
+        return row[key]
+    except Exception:
+        return row[index]
+
+
+
+def table_columns(conn, table_name):
+    if IS_POSTGRES:
+        rows = conn.execute(
+            "SELECT column_name AS name FROM information_schema.columns WHERE table_name=%s",
+            (table_name,)
+        ).fetchall()
+        return [r["name"] for r in rows]
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return [r["name"] for r in rows]
 
 def now():
     return datetime.now().isoformat(timespec="seconds")
@@ -55,7 +133,7 @@ def init_db():
     """)
 
 
-    cols = [r["name"] for r in cur.execute("PRAGMA table_info(users)").fetchall()]
+    cols = table_columns(conn, "users")
     if "is_blocked" not in cols:
         cur.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
 
@@ -501,7 +579,7 @@ def admin_ip():
         reason = request.form.get("reason", "").strip()
         if ip:
             conn.execute(
-                "INSERT OR IGNORE INTO blocked_ips(ip, reason, created_at) VALUES (?, ?, ?)",
+                "INSERT INTO blocked_ips(ip, reason, created_at) VALUES (?, ?, ?) ON CONFLICT (ip) DO NOTHING" if IS_POSTGRES else "INSERT OR IGNORE INTO blocked_ips(ip, reason, created_at) VALUES (?, ?, ?)",
                 (ip, reason, now())
             )
             conn.commit()
@@ -617,13 +695,20 @@ def api_chats():
 @login_required
 def api_new_chat():
     conn = db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO chats(user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        (session["user_id"], "새 채팅", now(), now())
-    )
+    if IS_POSTGRES:
+        row = conn.execute(
+            "INSERT INTO chats(user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id",
+            (session["user_id"], "새 채팅", now(), now())
+        ).fetchone()
+        chat_id = row["id"]
+    else:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO chats(user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (session["user_id"], "새 채팅", now(), now())
+        )
+        chat_id = cur.lastrowid
     conn.commit()
-    chat_id = cur.lastrowid
     conn.close()
     return jsonify({"ok": True, "chat": {"id": chat_id, "title": "새 채팅"}})
 
