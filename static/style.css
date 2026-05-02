@@ -364,3 +364,6 @@ button.red,.red{
 .admin-account a[href="/"]{
   display:inline-block !important;
 }
+
+/* hotfix hide dashboard */
+.admin-nav a[href="/"]{display:none!important}.admin-account a[href="/"]{display:inline-block!important}
