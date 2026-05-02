@@ -14,8 +14,6 @@
       <a class="active" href="/admin">👥 사용자 관리</a>
       <a href="/admin/ip">🛡️ IP 차단 관리</a>
       <a href="/admin/logs">🔒 로그인 시도 로그</a>
-      
-      <a href="/">🎮 대시보드</a>
     </nav>
   </aside>
 
@@ -26,7 +24,9 @@
       <div class="admin-account">
         <span>{{ session.get("username") }}</span>
         <a href="/logout">로그아웃</a>
-        <a href="/">관리자 메뉴 닫기</a>
+        <a href="/admin/backup">💾 DB 백업/복구</a>
+<a href="/admin/llm">🧠 LLM 설정</a>
+<a href="/">관리자 메뉴 닫기</a>
       </div>
     </header>
 

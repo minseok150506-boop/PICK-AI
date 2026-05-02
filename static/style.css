@@ -353,3 +353,14 @@ button.red,.red{
   font-weight:900;
   cursor:pointer;
 }
+
+.success{background:rgba(34,197,94,.16);border:1px solid rgba(34,197,94,.35);color:#bbf7d0;padding:12px 14px;border-radius:10px;margin:12px 0}.code-box{background:#020617;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:14px;color:#dbeafe;overflow:auto}
+
+
+/* force hide dashboard nav */
+.admin-nav a[href="/"]{
+  display:none !important;
+}
+.admin-account a[href="/"]{
+  display:inline-block !important;
+}

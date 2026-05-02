@@ -4,3 +4,5 @@ gunicorn==25.0.0
 waitress==3.0.2
 
 psycopg2-binary==2.9.10
+
+openai==2.8.1

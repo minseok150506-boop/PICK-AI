@@ -1,3 +1,6 @@
+from openai import OpenAI
+import urllib.request
+import json
 import time
 
 import os
@@ -9,11 +12,12 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Response, Flask, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
 APP_NAME = "PICK"
+OPENAI_MODEL = os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini")
 OWNER_ADMIN_USERNAME = "minseok"
 OWNER_ADMIN_PASSWORD = "kms0506a!"
 DB_PATH = "data/pick.db"
@@ -242,144 +246,103 @@ def clean_reply(text: str) -> str:
     return text or "죄송합니다. 응답을 만들지 못했습니다."
 
 
-def local_ai_reply(user_text: str) -> str:
+def build_conversation_messages(chat_id, user_text: str):
+    """DB에 저장된 최근 대화를 읽어 GPT 문맥으로 사용합니다."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "너는 PICK이라는 한국어 AI 챗봇이다. "
+                "제작자는 김민석이다. "
+                "항상 한국어 존댓말로 답한다. "
+                "사용자의 오타와 발음 실수를 적극적으로 해석한다. "
+                "질문을 회피하지 말고 바로 답한다. "
+                "모르면 모른다고 말하되, 가능한 대안과 다음 행동을 제시한다. "
+                "불필요하게 '더 자세히 말해 달라'고 반복하지 않는다."
+            )
+        }
+    ]
+
+    try:
+        conn = db()
+        rows = conn.execute(
+            "SELECT role, content FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 16",
+            (chat_id,)
+        ).fetchall()
+        conn.close()
+
+        for r in reversed(rows):
+            role = r["role"]
+            if role not in ("user", "assistant"):
+                continue
+            content = str(r["content"] or "").strip()
+            if content:
+                messages.append({"role": role, "content": content})
+    except Exception:
+        pass
+
+    messages.append({"role": "user", "content": user_text})
+    return messages
+
+
+def fallback_ai_reply(user_text: str) -> str:
     t = (user_text or "").strip()
+    lower = t.lower()
+
+    if not t:
+        return "메시지를 입력해 주세요."
+
+    if ("해마" in t and ("이모티콘" in t or "emoji" in lower or "이모지" in t)) or ("seahorse" in lower and "emoji" in lower):
+        return "해마 전용 유니코드 이모지는 없습니다. 대신 🐟 🐠 🐡 🐙 🦑 🐚 🌊 같은 바다 관련 이모지를 사용할 수 있습니다."
 
     if any(x in t for x in ["누가 만들", "제작자", "개발자", "만든 사람"]):
         return "PICK은 김민석님이 만든 AI 챗봇 서비스입니다."
 
-    if any(x in t for x in ["너는 누구", "정체", "뭐야"]):
-        return "저는 PICK입니다. 김민석님이 만든 한국어 AI 챗봇 서비스입니다."
-
-    if "이미지" in t and any(x in t for x in ["분석", "업로드", "봐"]):
-        return "이미지 분석 기능은 다음 단계에서 연결할 수 있습니다. 현재 클린 버전은 채팅, 회원가입, 관리자, DB 저장을 우선 안정화했습니다."
-
-    if "새 채팅" in t:
-        return "왼쪽의 새 채팅 버튼을 누르시면 새 대화를 시작할 수 있습니다."
-
-    if "안녕" in t:
-        return "안녕하세요. 저는 PICK입니다. 무엇을 도와드릴까요?"
-
-    if "도와" in t:
-        return "네, 도와드리겠습니다. 원하는 작업을 구체적으로 말씀해 주세요."
-
-    return f"요청을 확인했습니다. '{t}'에 대해 더 정확히 도와드리려면 원하는 결과를 조금 더 자세히 말씀해 주세요."
+    return f"'{t}'에 대해 답변드리겠습니다. GPT 연결이 아직 설정되지 않았습니다. Render 환경변수에 OPENAI_API_KEY를 넣으면 더 똑똑하게 답변합니다."
 
 
+def gpt_ai_reply(chat_id, user_text: str) -> str:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return fallback_ai_reply(user_text)
 
-# -----------------------------
-# Security helpers
-# -----------------------------
-LOGIN_ATTEMPTS = {}
-
-def client_ip():
-    return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
-
-def too_many_login_attempts(username):
-    key = f"{client_ip()}:{username}"
-    now_ts = time.time()
-    attempts = [t for t in LOGIN_ATTEMPTS.get(key, []) if now_ts - t < 300]
-    LOGIN_ATTEMPTS[key] = attempts
-    return len(attempts) >= 5
-
-def record_login_failure(username):
-    key = f"{client_ip()}:{username}"
-    LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
-
-def clear_login_failures(username):
-    key = f"{client_ip()}:{username}"
-    LOGIN_ATTEMPTS.pop(key, None)
-
-def strong_password(password):
-    if not valid_password(password):
-        return False
-    if len(password) < 8:
-        return False
-    return any(c.isalpha() for c in password) and any(c.isdigit() for c in password)
-
-@app.after_request
-def add_security_headers(response):
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    return response
-
-
-# -----------------------------
-# Security / audit helpers
-# -----------------------------
-LOGIN_ATTEMPTS = {}
-
-def client_ip():
-    return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
-
-def is_ip_blocked(ip=None):
-    ip = ip or client_ip()
-    conn = db()
-    row = conn.execute("SELECT id FROM blocked_ips WHERE ip=?", (ip,)).fetchone()
-    conn.close()
-    return row is not None
-
-def log_login(username, success, message):
-    conn = db()
-    conn.execute(
-        "INSERT INTO login_logs(username, ip, success, message, created_at) VALUES (?, ?, ?, ?, ?)",
-        (username, client_ip(), 1 if success else 0, message, now())
+    client = OpenAI(api_key=api_key)
+    res = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=build_conversation_messages(chat_id, user_text),
+        temperature=0.35,
+        max_tokens=1200,
     )
-    conn.commit()
-    conn.close()
+    return clean_reply(res.choices[0].message.content)
 
-def log_admin(action, target=""):
-    try:
-        conn = db()
-        conn.execute(
-            "INSERT INTO admin_logs(admin_id, admin_username, action, target, ip, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (session.get("user_id"), session.get("username"), action, str(target), client_ip(), now())
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
 
-def is_user_blocked(user_id):
-    try:
-        conn = db()
-        row = conn.execute("SELECT is_blocked FROM users WHERE id=?", (user_id,)).fetchone()
-        conn.close()
-        return bool(row and int(row["is_blocked"] or 0) == 1)
-    except Exception:
-        return False
-
-def too_many_login_attempts(username):
-    key = f"{client_ip()}:{username}"
-    now_ts = time.time()
-    attempts = [t for t in LOGIN_ATTEMPTS.get(key, []) if now_ts - t < 300]
-    LOGIN_ATTEMPTS[key] = attempts
-    return len(attempts) >= 5
-
-def record_login_failure(username):
-    key = f"{client_ip()}:{username}"
-    LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
-
-def clear_login_failures(username):
-    key = f"{client_ip()}:{username}"
-    LOGIN_ATTEMPTS.pop(key, None)
-
-@app.before_request
-def block_bad_ip():
-    if request.endpoint in {"static"}:
+def gpt_ai_stream(chat_id, user_text: str):
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        yield fallback_ai_reply(user_text)
         return
-    if is_ip_blocked():
-        return "차단된 IP입니다.", 403
 
-@app.after_request
-def security_headers(response):
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    return response
+    client = OpenAI(api_key=api_key)
+    stream = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=build_conversation_messages(chat_id, user_text),
+        temperature=0.35,
+        max_tokens=1200,
+        stream=True,
+    )
+
+    for chunk in stream:
+        try:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+        except Exception:
+            continue
+
+
+def local_ai_reply(user_text: str) -> str:
+    # 기존 non-stream API 호환용 fallback
+    return fallback_ai_reply(user_text)
 
 # -----------------------------
 # Auth
@@ -676,6 +639,161 @@ def admin_clear_all_messages():
     conn.close()
     return redirect(url_for("admin"))
 
+
+# -----------------------------
+# Backup / Restore / LLM Admin
+# -----------------------------
+BACKUP_TABLES = ["users", "chats", "messages", "blocked_ips", "login_logs", "admin_logs"]
+
+def table_exists(conn, table_name):
+    try:
+        if "IS_POSTGRES" in globals() and IS_POSTGRES:
+            row = conn.execute("SELECT table_name FROM information_schema.tables WHERE table_name=?", (table_name,)).fetchone()
+            return row is not None
+        row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+def export_backup_data():
+    conn = db()
+    data = {"app": "PICK", "version": "backup-v1", "created_at": now(), "tables": {}}
+    for table in BACKUP_TABLES:
+        if table_exists(conn, table):
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            data["tables"][table] = [dict(r) for r in rows]
+        else:
+            data["tables"][table] = []
+    conn.close()
+    return data
+
+def clear_backup_tables(conn):
+    for table in ["messages", "chats", "login_logs", "admin_logs", "blocked_ips", "users"]:
+        if table_exists(conn, table):
+            conn.execute(f"DELETE FROM {table}")
+
+def restore_backup_data(data, replace=False):
+    if not isinstance(data, dict) or "tables" not in data:
+        raise ValueError("올바른 백업 파일이 아닙니다.")
+    conn = db()
+    if replace:
+        clear_backup_tables(conn)
+    for table in BACKUP_TABLES:
+        rows = data.get("tables", {}).get(table, [])
+        if not rows or not table_exists(conn, table):
+            continue
+        for row in rows:
+            keys = list(row.keys())
+            values = [row[k] for k in keys]
+            placeholders = ",".join(["?"] * len(keys))
+            columns = ",".join(keys)
+            conflict = " ON CONFLICT DO NOTHING" if ("IS_POSTGRES" in globals() and IS_POSTGRES) else ""
+            try:
+                conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders}){conflict}", values)
+            except Exception:
+                pass
+    conn.commit()
+    conn.close()
+
+@app.route("/admin/backup")
+@admin_required
+def admin_backup_page():
+    return render_template("admin_backup.html", app_name=APP_NAME)
+
+@app.route("/admin/backup/download")
+@admin_required
+def admin_backup_download():
+    data = export_backup_data()
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    filename = f"pick_backup_{now().replace(':', '-')}.json"
+    return Response(payload, mimetype="application/json", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+@app.route("/admin/backup/restore", methods=["POST"])
+@admin_required
+def admin_backup_restore():
+    file = request.files.get("backup_file")
+    replace = request.form.get("replace") == "1"
+    if not file:
+        return render_template("admin_backup.html", app_name=APP_NAME, error="백업 파일을 선택해 주세요.")
+    try:
+        data = json.loads(file.read().decode("utf-8"))
+        restore_backup_data(data, replace=replace)
+        return render_template("admin_backup.html", app_name=APP_NAME, success="복구가 완료되었습니다.")
+    except Exception as e:
+        return render_template("admin_backup.html", app_name=APP_NAME, error=f"복구 실패: {e}")
+
+@app.route("/admin/llm")
+@admin_required
+def admin_llm_page():
+    return render_template(
+        "admin_llm.html",
+        app_name=APP_NAME,
+        mode=os.environ.get("PICK_LLM_MODE", "local"),
+        ollama_model=os.environ.get("PICK_OLLAMA_MODEL", "qwen2.5:14b"),
+        ollama_host=os.environ.get("PICK_OLLAMA_HOST", "http://localhost:11434")
+    )
+
+
+@app.route("/api/chats/<int:chat_id>/stream", methods=["POST"])
+@login_required
+def api_stream_chat(chat_id):
+    text = request.form.get("message", "").strip()
+    if not text:
+        return Response("data: [ERROR] 메시지가 비어 있습니다.\\n\\n", mimetype="text/event-stream")
+
+    owner = get_owned_chat_or_403(chat_id) if "get_owned_chat_or_403" in globals() else None
+    if not owner:
+        conn = db()
+        owner = conn.execute("SELECT id FROM chats WHERE id=? AND user_id=?", (chat_id, session["user_id"])).fetchone()
+        conn.close()
+
+    if not owner:
+        return Response("data: [ERROR] 권한이 없습니다.\\n\\n", mimetype="text/event-stream", status=403)
+
+    def generate():
+        full_reply = ""
+        try:
+            conn = db()
+            conn.execute(
+                "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (chat_id, "user", text, now())
+            )
+            title = text[:20] if text else "새 채팅"
+            conn.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?", (title, now(), chat_id))
+            conn.commit()
+            conn.close()
+
+            for token in gpt_ai_stream(chat_id, text):
+                full_reply += token
+                safe = token.replace("\\n", "\\\\n")
+                yield f"data: {safe}\\n\\n"
+
+            full_reply = clean_reply(full_reply)
+            conn = db()
+            conn.execute(
+                "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (chat_id, "assistant", full_reply, now())
+            )
+            conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
+            conn.commit()
+            conn.close()
+
+            yield "data: [DONE]\\n\\n"
+        except Exception as e:
+            if not full_reply:
+                full_reply = fallback_ai_reply(text)
+                conn = db()
+                conn.execute(
+                    "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                    (chat_id, "assistant", full_reply, now())
+                )
+                conn.commit()
+                conn.close()
+                yield f"data: {full_reply.replace(chr(10), '\\\\n')}\\n\\n"
+            yield "data: [DONE]\\n\\n"
+
+    return Response(generate(), mimetype="text/event-stream")
+
 # -----------------------------
 # API
 # -----------------------------
@@ -748,7 +866,7 @@ def api_send(chat_id):
         (chat_id, "user", text, now())
     )
 
-    reply = clean_reply(local_ai_reply(text))
+    reply = clean_reply(gpt_ai_reply(chat_id, text))
 
     conn.execute(
         "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
