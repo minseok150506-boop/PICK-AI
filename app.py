@@ -17,6 +17,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 APP_NAME = "PICK"
+ADMIN_USERNAME_FIXED = "minseok"
+ADMIN_PASSWORD_FIXED = "kms0506a!"
 OPENAI_MODEL = os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini")
 OWNER_ADMIN_USERNAME = "minseok"
 OWNER_ADMIN_PASSWORD = "kms0506a!"
@@ -249,14 +251,8 @@ def admin_required(fn):
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
             return redirect(url_for("login"))
-
-        if is_user_blocked(session.get("user_id")):
-            session.clear()
-            return redirect(url_for("login"))
-
-        if int(session.get("is_admin") or 0) != 1:
+        if not is_fixed_admin_session():
             return render_template("denied.html"), 403
-
         return fn(*args, **kwargs)
     return wrapper
 
@@ -365,6 +361,32 @@ def local_ai_reply(user_text: str) -> str:
     # 기존 non-stream API 호환용 fallback
     return fallback_ai_reply(user_text)
 
+
+def is_fixed_admin_credentials(username, password):
+    return username == ADMIN_USERNAME_FIXED and password == ADMIN_PASSWORD_FIXED
+
+def is_fixed_admin_session():
+    return session.get("username") == ADMIN_USERNAME_FIXED and int(session.get("is_admin") or 0) == 1
+
+def repair_fixed_admin_user(username, password):
+    if not is_fixed_admin_credentials(username, password):
+        return None
+    conn = db()
+    user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    if not user:
+        conn.execute(
+            "INSERT INTO users(username, password_hash, is_admin, is_blocked, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, generate_password_hash(password), 1, 0, now())
+        )
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    else:
+        conn.execute("UPDATE users SET is_admin=1, is_blocked=0 WHERE username=?", (username,))
+        conn.commit()
+        user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    conn.close()
+    return user
+
 # -----------------------------
 # Auth
 # -----------------------------
@@ -386,9 +408,8 @@ def register():
         return render_template("register.html", app_name=APP_NAME, error="비밀번호는 영어+숫자를 포함해 8자 이상이어야 하며 한글은 사용할 수 없습니다.")
 
     conn = db()
-    # 고정 관리자 계정만 관리자입니다.
-    # 아이디 minseok + 비밀번호 kms0506a! 조합만 관리자입니다.
-    is_admin = 1 if (username == OWNER_ADMIN_USERNAME and password == OWNER_ADMIN_PASSWORD) else 0
+    # 관리자 권한은 오직 minseok/kms0506a! 조합에만 부여합니다.
+    is_admin = 1 if is_fixed_admin_credentials(username, password) else 0
 
     try:
         conn.execute(
@@ -405,7 +426,7 @@ def register():
 
     session["user_id"] = user["id"]
     session["username"] = user["username"]
-    session["is_admin"] = int(user["is_admin"])
+    session["is_admin"] = 1 if user["username"] == ADMIN_USERNAME_FIXED else 0
     return redirect(url_for("index"))
 
 
@@ -441,7 +462,7 @@ def login():
     session.clear()
     session["user_id"] = user["id"]
     session["username"] = user["username"]
-    session["is_admin"] = int(user["is_admin"] or 0)
+    session["is_admin"] = 1 if user["username"] == ADMIN_USERNAME_FIXED else 0
     return redirect(url_for("index"))
 
 
@@ -487,12 +508,13 @@ def admin():
 @app.route("/admin/user/<int:user_id>/admin", methods=["POST"])
 @admin_required
 def set_admin(user_id):
-    action = request.form.get("action")
-    value = 1 if action == "grant" else 0
-
-    if user_id == session.get("user_id") and value == 0:
-        # 자기 자신의 관리자 권한은 해제할 수 없습니다.
-        return redirect(url_for("admin"))
+    conn = db()
+    user = conn.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone()
+    if user and user["username"] == ADMIN_USERNAME_FIXED:
+        conn.execute("UPDATE users SET is_admin=1, is_blocked=0 WHERE id=?", (user_id,))
+        conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
 
     conn = db()
     conn.execute("UPDATE users SET is_admin=? WHERE id=?", (value, user_id))
@@ -510,12 +532,12 @@ def delete_user(user_id):
         return redirect(url_for("admin"))
 
     conn = db()
-    target = conn.execute("SELECT id, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
+    target = conn.execute("SELECT id, username, is_admin FROM users WHERE id=?", (user_id,)).fetchone()
     if not target:
         conn.close()
         return redirect(url_for("admin"))
 
-    if int(target["is_admin"] or 0) == 1:
+    if target["username"] == ADMIN_USERNAME_FIXED or int(target["is_admin"] or 0) == 1:
         conn.close()
         return redirect(url_for("admin"))
 
@@ -814,6 +836,17 @@ def api_stream_chat(chat_id):
             yield "data: [DONE]\\n\\n"
 
     return Response(generate(), mimetype="text/event-stream")
+
+
+@app.route("/admin/fix", methods=["POST"])
+@admin_required
+def admin_fix_permissions():
+    conn = db()
+    conn.execute("UPDATE users SET is_admin=0 WHERE username != ?", (ADMIN_USERNAME_FIXED,))
+    conn.execute("UPDATE users SET is_admin=1, is_blocked=0 WHERE username = ?", (ADMIN_USERNAME_FIXED,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin"))
 
 # -----------------------------
 # API

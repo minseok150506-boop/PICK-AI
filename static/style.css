@@ -367,3 +367,5 @@ button.red,.red{
 
 /* hotfix hide dashboard */
 .admin-nav a[href="/"]{display:none!important}.admin-account a[href="/"]{display:inline-block!important}
+
+button.green,.green{background:#16a34a!important;color:white!important;border:0;border-radius:8px;padding:10px 14px;font-weight:900;cursor:pointer}

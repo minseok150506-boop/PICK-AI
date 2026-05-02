@@ -33,6 +33,7 @@
     <section class="admin-content">
       <h1>사용자 관리</h1>
       <p class="admin-subtitle">회원 목록 및 차단 관리</p>
+      <form method="post" action="/admin/fix" style="margin:0 0 10px;"><button class="green" type="submit">관리자 권한 정리</button></form>
       <form method="post" action="/admin/messages/clear" onsubmit="return confirm('정말 전체 채팅과 메시지를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.');" style="margin:0 0 16px;">
         <button class="red" type="submit">관리자 전체 채팅/메시지 삭제</button>
       </form>
