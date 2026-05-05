@@ -1,3 +1,4 @@
+import traceback
 from openai import OpenAI
 import urllib.request
 import json
@@ -17,6 +18,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 APP_NAME = "PICK"
+ASSET_VERSION = "stable-gpt-20260505"
 ADMIN_USERNAME_FIXED = "minseok"
 ADMIN_PASSWORD_FIXED = "kms0506a!"
 OPENAI_MODEL = os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini")
@@ -250,79 +252,106 @@ def clean_reply(text: str) -> str:
     return text or "죄송합니다. 응답을 만들지 못했습니다."
 
 
+# -----------------------------
+# Stable GPT connection
+# -----------------------------
+def get_openai_key():
+    return os.environ.get("OPENAI_API_KEY", "").strip()
+
+def get_openai_model():
+    return os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+
+def has_openai_key():
+    key = get_openai_key()
+    return bool(key and key.startswith("sk-"))
+
 def build_conversation_messages(chat_id, user_text: str):
     messages = [
         {
             "role": "system",
             "content": (
                 "너는 PICK이라는 한국어 AI 챗봇이다. 제작자는 김민석이다. "
-                "항상 한국어 존댓말로 답한다. 사용자의 오타와 짧은 말을 적극적으로 해석한다. "
-                "질문을 회피하지 말고 바로 답한다. 모르면 모른다고 말하고 대안을 제시한다."
+                "항상 한국어 존댓말로 답한다. 사용자의 오타, 줄임말, 어색한 표현을 적극적으로 해석한다. "
+                "질문을 회피하지 말고 바로 답한다. 모르면 모른다고 말하고 가능한 대안을 제시한다. "
+                "불필요하게 다시 물어보지 말고, 가능한 답을 먼저 준다."
             )
         }
     ]
     try:
         conn = db()
         rows = conn.execute(
-            "SELECT role, content FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 16",
+            "SELECT role, content FROM messages WHERE chat_id=? ORDER BY id DESC LIMIT 20",
             (chat_id,)
         ).fetchall()
         conn.close()
         for r in reversed(rows):
             role = r["role"]
-            content = str(r["content"] or "").strip()
+            content = normalize_chat_text(r["content"])
             if role in ("user", "assistant") and content:
                 messages.append({"role": role, "content": content})
     except Exception:
-        pass
-    messages.append({"role": "user", "content": user_text})
+        print("[PICK] conversation memory load failed")
+        traceback.print_exc()
+    messages.append({"role": "user", "content": normalize_chat_text(user_text)})
     return messages
 
 def fallback_ai_reply(user_text: str) -> str:
-    t = (user_text or "").strip()
+    t = normalize_chat_text(user_text)
     if not t:
         return "메시지를 입력해 주세요."
-    if "해마" in t and ("이모티콘" in t or "이모지" in t):
-        return "해마 전용 유니코드 이모지는 없습니다. 대신 🐟 🐠 🐡 🐙 🦑 🐚 🌊 같은 바다 관련 이모지를 사용할 수 있습니다."
-    if any(x in t for x in ["누가 만들", "제작자", "개발자", "만든 사람"]):
-        return "PICK은 김민석님이 만든 AI 챗봇 서비스입니다."
-    return "GPT API 키가 아직 설정되지 않았습니다. Render Environment에 OPENAI_API_KEY를 넣으면 질문에 더 정확히 답변합니다."
-
-def gpt_ai_stream(chat_id, user_text: str):
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        yield fallback_ai_reply(user_text)
-        return
-
-    client = OpenAI(api_key=api_key)
-    stream = client.chat.completions.create(
-        model=os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini"),
-        messages=build_conversation_messages(chat_id, user_text),
-        temperature=0.35,
-        max_tokens=1200,
-        stream=True,
-    )
-    for chunk in stream:
-        try:
-            token = chunk.choices[0].delta.content
-            if token:
-                yield token
-        except Exception:
-            continue
+    if not has_openai_key():
+        return (
+            "GPT 연결이 아직 설정되지 않았습니다. Render Environment에서 "
+            "환경변수 이름을 정확히 OPENAI_API_KEY로 넣어야 합니다. "
+            "OPENAI_API KEY처럼 공백이 있으면 인식하지 못합니다."
+        )
+    return "GPT 연결 중 오류가 발생했습니다. Render Logs에서 [PICK GPT ERROR]를 확인해 주세요."
 
 def gpt_ai_reply(chat_id, user_text: str) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    if not has_openai_key():
         return fallback_ai_reply(user_text)
+    try:
+        client = OpenAI(api_key=get_openai_key())
+        res = client.chat.completions.create(
+            model=get_openai_model(),
+            messages=build_conversation_messages(chat_id, user_text),
+            temperature=0.35,
+            max_tokens=1200,
+        )
+        return normalize_chat_text(res.choices[0].message.content or "")
+    except Exception as e:
+        print("[PICK GPT ERROR] non-stream request failed:", repr(e))
+        traceback.print_exc()
+        return "GPT 호출에 실패했습니다. API 키, 결제 상태, 모델 이름을 확인해 주세요."
 
-    client = OpenAI(api_key=api_key)
-    res = client.chat.completions.create(
-        model=os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini"),
-        messages=build_conversation_messages(chat_id, user_text),
-        temperature=0.35,
-        max_tokens=1200,
-    )
-    return clean_reply(res.choices[0].message.content or "")
+def gpt_ai_stream(chat_id, user_text: str):
+    if not has_openai_key():
+        yield fallback_ai_reply(user_text)
+        return
+    try:
+        client = OpenAI(api_key=get_openai_key())
+        stream = client.chat.completions.create(
+            model=get_openai_model(),
+            messages=build_conversation_messages(chat_id, user_text),
+            temperature=0.35,
+            max_tokens=1200,
+            stream=True,
+        )
+        emitted = False
+        for chunk in stream:
+            try:
+                token = chunk.choices[0].delta.content
+                if token:
+                    emitted = True
+                    yield token
+            except Exception:
+                continue
+        if not emitted:
+            yield "GPT 응답이 비어 있습니다. 다시 질문해 주세요."
+    except Exception as e:
+        print("[PICK GPT ERROR] stream request failed:", repr(e))
+        traceback.print_exc()
+        yield "GPT 호출에 실패했습니다. API 키, 결제 상태, 모델 이름을 확인해 주세요."
 
 def local_ai_reply(user_text: str) -> str:
     return fallback_ai_reply(user_text)
@@ -830,9 +859,9 @@ def admin_llm_page():
 @app.route("/api/chats/<int:chat_id>/stream", methods=["POST"])
 @login_required
 def api_stream_chat(chat_id):
-    text = request.form.get("message", "").strip()
+    text = normalize_chat_text(request.form.get("message", ""))
     if not text:
-        return Response("data: [ERROR] 메시지가 비어 있습니다.\n\n", mimetype="text/event-stream")
+        return Response("data: [ERROR] 메시지가 비어 있습니다.\\n\\n", mimetype="text/event-stream")
 
     owner = get_owned_chat_or_403(chat_id) if "get_owned_chat_or_403" in globals() else None
     if not owner:
@@ -841,7 +870,12 @@ def api_stream_chat(chat_id):
         conn.close()
 
     if not owner:
-        return Response("data: [ERROR] 권한이 없습니다.\n\n", mimetype="text/event-stream", status=403)
+        return Response("data: [ERROR] 권한이 없습니다.\\n\\n", mimetype="text/event-stream", status=403)
+
+    def sse(data):
+        data = str(data or "").replace("\r\n", "\n").replace("\r", "\n")
+        data = data.replace("\n", "\\n")
+        return f"data: {data}\\n\\n"
 
     def generate():
         full_reply = ""
@@ -853,23 +887,24 @@ def api_stream_chat(chat_id):
                 "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                 (chat_id, "user", text, now())
             )
-
-            # 채팅 이름은 첫 메시지에서만 정합니다. 이후 질문으로 계속 바꾸지 않습니다.
             if old_title.strip() in ("", "새 채팅"):
-                new_title = text[:20] if text else "새 채팅"
-                conn.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?", (new_title, now(), chat_id))
+                conn.execute(
+                    "UPDATE chats SET title=?, updated_at=? WHERE id=?",
+                    (text[:20] or "새 채팅", now(), chat_id)
+                )
             else:
                 conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
-
             conn.commit()
             conn.close()
 
             for token in gpt_ai_stream(chat_id, text):
                 full_reply += token
-                safe = token.replace("\n", "\\n")
-                yield f"data: {safe}\n\n"
+                yield sse(token)
 
-            full_reply = normalize_chat_text(clean_reply(full_reply) or fallback_ai_reply(text))
+            full_reply = normalize_chat_text(full_reply)
+            if not full_reply:
+                full_reply = "응답이 비어 있습니다. 다시 질문해 주세요."
+
             conn = db()
             conn.execute(
                 "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
@@ -878,23 +913,30 @@ def api_stream_chat(chat_id):
             conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
             conn.commit()
             conn.close()
-            yield "data: [DONE]\n\n"
-        except Exception:
-            fallback = fallback_ai_reply(text)
+            yield "data: [DONE]\\n\\n"
+
+        except Exception as e:
+            print("[PICK STREAM ERROR]", repr(e))
+            traceback.print_exc()
+            msg = "채팅 처리 중 서버 오류가 발생했습니다. Render Logs를 확인해 주세요."
             try:
                 conn = db()
                 conn.execute(
                     "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                    (chat_id, "assistant", fallback, now())
+                    (chat_id, "assistant", msg, now())
                 )
                 conn.commit()
                 conn.close()
             except Exception:
                 pass
-            yield f"data: {fallback.replace(chr(10), '\\n')}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse(msg)
+            yield "data: [DONE]\\n\\n"
 
-    return Response(generate(), mimetype="text/event-stream")
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 
 @app.route("/admin/fix", methods=["POST"])
@@ -906,6 +948,42 @@ def admin_fix_permissions():
     conn.commit()
     conn.close()
     return redirect(url_for("admin"))
+
+
+@app.route("/admin/gpt-test")
+@admin_required
+def admin_gpt_test():
+    key_status = "인식됨" if has_openai_key() else "없음"
+    model = get_openai_model()
+    test_result = ""
+    if has_openai_key():
+        try:
+            client = OpenAI(api_key=get_openai_key())
+            res = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "한국어로 짧게 답하세요."},
+                    {"role": "user", "content": "PICK GPT 연결 테스트입니다. 정상인가요?"}
+                ],
+                max_tokens=80,
+                temperature=0.2,
+            )
+            test_result = normalize_chat_text(res.choices[0].message.content or "")
+        except Exception as e:
+            print("[PICK GPT TEST ERROR]", repr(e))
+            traceback.print_exc()
+            test_result = f"실패: {type(e).__name__}: {e}"
+    else:
+        test_result = "OPENAI_API_KEY 환경변수가 인식되지 않습니다."
+
+    return render_template("admin_gpt_test.html", app_name=APP_NAME, key_status=key_status, model=model, test_result=test_result)
+
+
+@app.after_request
+def no_cache_headers(response):
+    if request.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 # -----------------------------
 # API

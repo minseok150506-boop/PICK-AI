@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>PICK GPT 연결 테스트</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-dashboard-body">
+<div class="admin-layout">
+  <aside class="admin-sidebar">
+    <div class="admin-logo">PICK</div>
+    <div class="admin-menu-title">관리자 메뉴</div>
+    <nav class="admin-nav">
+      <a href="/admin">👥 사용자 관리</a>
+      <a href="/admin/logs">🔒 로그인 로그</a>
+      <a class="active" href="/admin/gpt-test">🧠 GPT 연결 테스트</a>
+      <a href="/">관리자 메뉴 닫기</a>
+    </nav>
+  </aside>
+  <main class="admin-main">
+    <header class="admin-top">
+      <div></div>
+      <div class="admin-account">
+        <span>{{ session.get("username") }}</span>
+        <a href="/logout">로그아웃</a>
+        <a href="/">관리자 메뉴 닫기</a>
+      </div>
+    </header>
+    <section class="admin-content">
+      <h1>GPT 연결 테스트</h1>
+      <section class="admin-panel">
+        <table class="admin-table">
+          <tr><th>항목</th><th>상태</th></tr>
+          <tr><td>OPENAI_API_KEY</td><td>{{ key_status }}</td></tr>
+          <tr><td>모델</td><td>{{ model }}</td></tr>
+          <tr><td>테스트 결과</td><td>{{ test_result }}</td></tr>
+        </table>
+      </section>
+    </section>
+  </main>
+</div>
+</body>
+</html>
