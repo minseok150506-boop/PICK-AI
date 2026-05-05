@@ -415,6 +415,14 @@ def repair_fixed_admin_user(username, password):
     return user
 
 
+
+def normalize_chat_text(text):
+    text = str(text or "")
+    text = text.strip()
+    # 빈 줄이 여러 개 생기는 것을 한 줄로 줄입니다.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
 # -----------------------------
 # Auth
 # -----------------------------
@@ -861,7 +869,7 @@ def api_stream_chat(chat_id):
                 safe = token.replace("\n", "\\n")
                 yield f"data: {safe}\n\n"
 
-            full_reply = clean_reply(full_reply) or fallback_ai_reply(text)
+            full_reply = normalize_chat_text(clean_reply(full_reply) or fallback_ai_reply(text))
             conn = db()
             conn.execute(
                 "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",

@@ -397,3 +397,20 @@ button.green,.green{background:#16a34a!important;color:white!important;border:0;
     max-width:70vw !important;
   }
 }
+
+
+/* ===== remove extra bubble spacing ===== */
+.bubble{
+  padding-top:9px !important;
+  padding-bottom:9px !important;
+  line-height:1.42 !important;
+  white-space:pre-wrap;
+}
+.message-text{
+  display:inline;
+  margin:0 !important;
+  padding:0 !important;
+}
+.msg-stack{
+  gap:3px !important;
+}

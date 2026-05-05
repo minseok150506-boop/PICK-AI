@@ -265,7 +265,7 @@ async function sendMessage(){
         }
 
         token = token.replaceAll('\\n', '\n');
-        botSpan.textContent += token;
+        botSpan.textContent += token.replace(/^\n+/, '');
         qs('messageArea').scrollTop = qs('messageArea').scrollHeight;
       }
     }
@@ -334,7 +334,7 @@ async function sendMessage(){
         }
 
         token = token.replaceAll('\\n', '\n');
-        botSpan.textContent += token;
+        botSpan.textContent += token.replace(/^\n+/, '');
         qs('messageArea').scrollTop = qs('messageArea').scrollHeight;
       }
     }
@@ -352,4 +352,22 @@ async function sendMessage(){
     qs('sendBtn').textContent = '전송';
     input.focus();
   }
+}
+
+
+
+/* ===== bubble whitespace cleanup ===== */
+function cleanBubbleText(text){
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+if(typeof addMessage === 'function' && !window.__pickBubbleCleanWrapped){
+  const __oldAddMessage = addMessage;
+  addMessage = function(role, text, id=null){
+    return __oldAddMessage(role, cleanBubbleText(text), id);
+  };
+  window.__pickBubbleCleanWrapped = true;
 }
