@@ -369,3 +369,31 @@ button.red,.red{
 .admin-nav a[href="/"]{display:none!important}.admin-account a[href="/"]{display:inline-block!important}
 
 button.green,.green{background:#16a34a!important;color:white!important;border:0;border-radius:8px;padding:10px 14px;font-weight:900;cursor:pointer}
+
+
+/* ===== compact chat bubbles ===== */
+.bubble{
+  max-width:min(560px, 78vw) !important;
+  padding:12px 16px !important;
+  border-radius:16px !important;
+  font-size:15px !important;
+  line-height:1.55 !important;
+}
+.msg-row.user .bubble,
+.bubble.user{
+  max-width:min(420px, 72vw) !important;
+}
+.msg-stack{
+  max-width:min(620px, 82vw) !important;
+}
+@media(max-width:700px){
+  .bubble{
+    max-width:78vw !important;
+    padding:10px 13px !important;
+    font-size:14px !important;
+  }
+  .msg-row.user .bubble,
+  .bubble.user{
+    max-width:70vw !important;
+  }
+}

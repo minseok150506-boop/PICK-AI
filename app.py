@@ -251,22 +251,16 @@ def clean_reply(text: str) -> str:
 
 
 def build_conversation_messages(chat_id, user_text: str):
-    """DB에 저장된 최근 대화를 읽어 GPT 문맥으로 사용합니다."""
     messages = [
         {
             "role": "system",
             "content": (
-                "너는 PICK이라는 한국어 AI 챗봇이다. "
-                "제작자는 김민석이다. "
-                "항상 한국어 존댓말로 답한다. "
-                "사용자의 오타와 발음 실수를 적극적으로 해석한다. "
-                "질문을 회피하지 말고 바로 답한다. "
-                "모르면 모른다고 말하되, 가능한 대안과 다음 행동을 제시한다. "
-                "불필요하게 '더 자세히 말해 달라'고 반복하지 않는다."
+                "너는 PICK이라는 한국어 AI 챗봇이다. 제작자는 김민석이다. "
+                "항상 한국어 존댓말로 답한다. 사용자의 오타와 짧은 말을 적극적으로 해석한다. "
+                "질문을 회피하지 말고 바로 답한다. 모르면 모른다고 말하고 대안을 제시한다."
             )
         }
     ]
-
     try:
         conn = db()
         rows = conn.execute(
@@ -274,51 +268,25 @@ def build_conversation_messages(chat_id, user_text: str):
             (chat_id,)
         ).fetchall()
         conn.close()
-
         for r in reversed(rows):
             role = r["role"]
-            if role not in ("user", "assistant"):
-                continue
             content = str(r["content"] or "").strip()
-            if content:
+            if role in ("user", "assistant") and content:
                 messages.append({"role": role, "content": content})
     except Exception:
         pass
-
     messages.append({"role": "user", "content": user_text})
     return messages
 
-
 def fallback_ai_reply(user_text: str) -> str:
     t = (user_text or "").strip()
-    lower = t.lower()
-
     if not t:
         return "메시지를 입력해 주세요."
-
-    if ("해마" in t and ("이모티콘" in t or "emoji" in lower or "이모지" in t)) or ("seahorse" in lower and "emoji" in lower):
+    if "해마" in t and ("이모티콘" in t or "이모지" in t):
         return "해마 전용 유니코드 이모지는 없습니다. 대신 🐟 🐠 🐡 🐙 🦑 🐚 🌊 같은 바다 관련 이모지를 사용할 수 있습니다."
-
     if any(x in t for x in ["누가 만들", "제작자", "개발자", "만든 사람"]):
         return "PICK은 김민석님이 만든 AI 챗봇 서비스입니다."
-
-    return f"'{t}'에 대해 답변드리겠습니다. GPT 연결이 아직 설정되지 않았습니다. Render 환경변수에 OPENAI_API_KEY를 넣으면 더 똑똑하게 답변합니다."
-
-
-def gpt_ai_reply(chat_id, user_text: str) -> str:
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key:
-        return fallback_ai_reply(user_text)
-
-    client = OpenAI(api_key=api_key)
-    res = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=build_conversation_messages(chat_id, user_text),
-        temperature=0.35,
-        max_tokens=1200,
-    )
-    return clean_reply(res.choices[0].message.content)
-
+    return "GPT API 키가 아직 설정되지 않았습니다. Render Environment에 OPENAI_API_KEY를 넣으면 질문에 더 정확히 답변합니다."
 
 def gpt_ai_stream(chat_id, user_text: str):
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -328,32 +296,36 @@ def gpt_ai_stream(chat_id, user_text: str):
 
     client = OpenAI(api_key=api_key)
     stream = client.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini"),
         messages=build_conversation_messages(chat_id, user_text),
         temperature=0.35,
         max_tokens=1200,
         stream=True,
     )
-
     for chunk in stream:
         try:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+            token = chunk.choices[0].delta.content
+            if token:
+                yield token
         except Exception:
             continue
 
+def gpt_ai_reply(chat_id, user_text: str) -> str:
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return fallback_ai_reply(user_text)
+
+    client = OpenAI(api_key=api_key)
+    res = client.chat.completions.create(
+        model=os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini"),
+        messages=build_conversation_messages(chat_id, user_text),
+        temperature=0.35,
+        max_tokens=1200,
+    )
+    return clean_reply(res.choices[0].message.content or "")
 
 def local_ai_reply(user_text: str) -> str:
-    # 기존 non-stream API 호환용 fallback
     return fallback_ai_reply(user_text)
-
-
-
-
-
-
-
 
 # -----------------------------
 # Required security helpers
@@ -852,36 +824,44 @@ def admin_llm_page():
 def api_stream_chat(chat_id):
     text = request.form.get("message", "").strip()
     if not text:
-        return Response("data: [ERROR] 메시지가 비어 있습니다.\\n\\n", mimetype="text/event-stream")
+        return Response("data: [ERROR] 메시지가 비어 있습니다.\n\n", mimetype="text/event-stream")
 
     owner = get_owned_chat_or_403(chat_id) if "get_owned_chat_or_403" in globals() else None
     if not owner:
         conn = db()
-        owner = conn.execute("SELECT id FROM chats WHERE id=? AND user_id=?", (chat_id, session["user_id"])).fetchone()
+        owner = conn.execute("SELECT id, title FROM chats WHERE id=? AND user_id=?", (chat_id, session["user_id"])).fetchone()
         conn.close()
 
     if not owner:
-        return Response("data: [ERROR] 권한이 없습니다.\\n\\n", mimetype="text/event-stream", status=403)
+        return Response("data: [ERROR] 권한이 없습니다.\n\n", mimetype="text/event-stream", status=403)
 
     def generate():
         full_reply = ""
         try:
             conn = db()
+            current_chat = conn.execute("SELECT title FROM chats WHERE id=? AND user_id=?", (chat_id, session["user_id"])).fetchone()
+            old_title = (current_chat["title"] if current_chat else "") or ""
             conn.execute(
                 "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                 (chat_id, "user", text, now())
             )
-            title = text[:20] if text else "새 채팅"
-            conn.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?", (title, now(), chat_id))
+
+            # 채팅 이름은 첫 메시지에서만 정합니다. 이후 질문으로 계속 바꾸지 않습니다.
+            if old_title.strip() in ("", "새 채팅"):
+                new_title = text[:20] if text else "새 채팅"
+                conn.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?", (new_title, now(), chat_id))
+            else:
+                conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
+
             conn.commit()
             conn.close()
 
             for token in gpt_ai_stream(chat_id, text):
                 full_reply += token
-                safe = token.replace("\\n", "\\\\n")
-                yield f"data: {safe}\\n\\n"
+                safe = token.replace("\n", "\\n")
+                yield f"data: {safe}\n\n"
 
-            full_reply = clean_reply(full_reply)
+            full_reply = clean_reply(full_reply) or fallback_ai_reply(text)
             conn = db()
             conn.execute(
                 "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
@@ -890,20 +870,21 @@ def api_stream_chat(chat_id):
             conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
             conn.commit()
             conn.close()
-
-            yield "data: [DONE]\\n\\n"
-        except Exception as e:
-            if not full_reply:
-                full_reply = fallback_ai_reply(text)
+            yield "data: [DONE]\n\n"
+        except Exception:
+            fallback = fallback_ai_reply(text)
+            try:
                 conn = db()
                 conn.execute(
                     "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                    (chat_id, "assistant", full_reply, now())
+                    (chat_id, "assistant", fallback, now())
                 )
                 conn.commit()
                 conn.close()
-                yield f"data: {full_reply.replace(chr(10), '\\\\n')}\\n\\n"
-            yield "data: [DONE]\\n\\n"
+            except Exception:
+                pass
+            yield f"data: {fallback.replace(chr(10), '\\n')}\n\n"
+            yield "data: [DONE]\n\n"
 
     return Response(generate(), mimetype="text/event-stream")
 
@@ -997,8 +978,13 @@ def api_send(chat_id):
         (chat_id, "assistant", reply, now())
     )
 
-    title = text[:20] if text else "새 채팅"
-    conn.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?", (title, now(), chat_id))
+    chat_row = conn.execute("SELECT title FROM chats WHERE id=?", (chat_id,)).fetchone()
+    old_title = (chat_row["title"] if chat_row else "") or ""
+    if old_title.strip() in ("", "새 채팅"):
+        title = text[:20] if text else "새 채팅"
+        conn.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?", (title, now(), chat_id))
+    else:
+        conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
     conn.commit()
     conn.close()
 

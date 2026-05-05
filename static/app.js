@@ -280,3 +280,76 @@ async function sendMessage(){
     input.focus();
   }
 }
+
+
+/* ===== PICK stable streaming send override ===== */
+async function sendMessage(){
+  if(isSending) return;
+  const input = qs('messageInput');
+  const text = input.value.trim();
+  if(!text) return;
+
+  if(!currentChatId){
+    await newChat();
+  }
+
+  isSending = true;
+  qs('sendBtn').disabled = true;
+  qs('sendBtn').textContent = '...';
+
+  addMessage('user', text);
+  input.value = '';
+  growInput();
+
+  const botSpan = addMessage('assistant', '');
+
+  try{
+    const form = new FormData();
+    form.append('message', text);
+
+    const res = await fetch(`/api/chats/${currentChatId}/stream`, {method:'POST', body:form});
+    if(!res.ok || !res.body) throw new Error('stream failed');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buffer += decoder.decode(value, {stream:true});
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+
+      for(const part of parts){
+        if(!part.startsWith('data:')) continue;
+        let token = part.slice(5).trimStart();
+
+        if(token === '[DONE]'){
+          continue;
+        }
+        if(token.startsWith('[ERROR]')){
+          botSpan.textContent += token.replace('[ERROR]', '').trim();
+          continue;
+        }
+
+        token = token.replaceAll('\\n', '\n');
+        botSpan.textContent += token;
+        qs('messageArea').scrollTop = qs('messageArea').scrollHeight;
+      }
+    }
+
+    if(!botSpan.textContent.trim()){
+      botSpan.textContent = '응답이 비어 있습니다. 다시 질문해 주세요.';
+    }
+
+    await loadChats();
+  }catch(e){
+    botSpan.textContent = '응답 처리 중 오류가 발생했습니다. OPENAI_API_KEY와 Render 로그를 확인해 주세요.';
+  }finally{
+    isSending = false;
+    qs('sendBtn').disabled = false;
+    qs('sendBtn').textContent = '전송';
+    input.focus();
+  }
+}
