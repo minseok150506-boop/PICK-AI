@@ -220,28 +220,15 @@ def valid_password(password: str) -> bool:
 
 
 
-def is_user_blocked(user_id):
-    """차단 유저 확인. 함수가 없어서 / 접속 시 500이 나던 문제를 고칩니다."""
-    if not user_id:
-        return False
-    try:
-        conn = db()
-        row = conn.execute("SELECT is_blocked FROM users WHERE id=?", (user_id,)).fetchone()
-        conn.close()
-        return bool(row and int(row["is_blocked"] or 0) == 1)
-    except Exception:
-        return False
 
 def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if not session.get("user_id"):
             return redirect(url_for("login"))
-
         if is_user_blocked(session.get("user_id")):
             session.clear()
             return redirect(url_for("login"))
-
         return fn(*args, **kwargs)
     return wrapper
 
@@ -362,11 +349,79 @@ def local_ai_reply(user_text: str) -> str:
     return fallback_ai_reply(user_text)
 
 
+
+
+
+
+
+
+# -----------------------------
+# Required security helpers
+# -----------------------------
+LOGIN_ATTEMPTS = {}
+
+def client_ip():
+    return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+
+def too_many_login_attempts(username):
+    username = username or "unknown"
+    key = f"{client_ip()}:{username}"
+    now_ts = time.time()
+    attempts = [t for t in LOGIN_ATTEMPTS.get(key, []) if now_ts - t < 300]
+    LOGIN_ATTEMPTS[key] = attempts
+    return len(attempts) >= 5
+
+def record_login_failure(username):
+    username = username or "unknown"
+    key = f"{client_ip()}:{username}"
+    LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
+
+def clear_login_failures(username):
+    username = username or "unknown"
+    key = f"{client_ip()}:{username}"
+    LOGIN_ATTEMPTS.pop(key, None)
+
+def valid_username(username):
+    if not username:
+        return False
+    if not (3 <= len(username) <= 32):
+        return False
+    return re.fullmatch(r"[A-Za-z0-9_\\-]+", username) is not None
+
+def valid_password(password):
+    if not password:
+        return False
+    if not (4 <= len(password) <= 128):
+        return False
+    if re.search(r"[가-힣ㄱ-ㅎㅏ-ㅣ]", password):
+        return False
+    return True
+
+def strong_password(password):
+    if password == ADMIN_PASSWORD_FIXED:
+        return True
+    if not valid_password(password):
+        return False
+    if len(password) < 8:
+        return False
+    return any(c.isalpha() for c in password) and any(c.isdigit() for c in password)
+
 def is_fixed_admin_credentials(username, password):
     return username == ADMIN_USERNAME_FIXED and password == ADMIN_PASSWORD_FIXED
 
 def is_fixed_admin_session():
     return session.get("username") == ADMIN_USERNAME_FIXED and int(session.get("is_admin") or 0) == 1
+
+def is_user_blocked(user_id):
+    if not user_id:
+        return False
+    try:
+        conn = db()
+        row = conn.execute("SELECT is_blocked FROM users WHERE id=?", (user_id,)).fetchone()
+        conn.close()
+        return bool(row and int(row["is_blocked"] or 0) == 1)
+    except Exception:
+        return False
 
 def repair_fixed_admin_user(username, password):
     if not is_fixed_admin_credentials(username, password):
@@ -387,59 +442,78 @@ def repair_fixed_admin_user(username, password):
     conn.close()
     return user
 
+
 # -----------------------------
 # Auth
 # -----------------------------
-@app.route("/register", methods=["GET", "POST"])
+@app.route("/register", methods=["GET", "POST", "HEAD"])
 def register():
+    if request.method == "HEAD":
+        return "", 200
+
     if request.method == "GET":
         return render_template("register.html", app_name=APP_NAME)
 
-    username = request.form.get("username", "").strip()
-    password = request.form.get("password", "").strip()
-
-    if has_korean(username) or has_korean(password):
-        return render_template("register.html", app_name=APP_NAME, error="아이디와 비밀번호에는 한글을 사용할 수 없습니다.")
+    username = (
+        request.form.get("register_id", "")
+        or request.form.get("username", "")
+    ).strip()
+    password = (
+        request.form.get("register_password", "")
+        or request.form.get("password", "")
+    ).strip()
 
     if not valid_username(username):
-        return render_template("register.html", app_name=APP_NAME, error="아이디는 영어, 숫자, _, - 만 사용할 수 있으며 2~32자여야 합니다.")
+        return render_template("register.html", app_name=APP_NAME, error="아이디는 영어, 숫자, _, - 만 사용하고 3~32자여야 합니다.")
 
     if not strong_password(password):
-        return render_template("register.html", app_name=APP_NAME, error="비밀번호는 영어+숫자를 포함해 8자 이상이어야 하며 한글은 사용할 수 없습니다.")
+        return render_template("register.html", app_name=APP_NAME, error="비밀번호는 영어+숫자 포함 8자 이상이어야 하며 한글은 사용할 수 없습니다.")
 
-    conn = db()
-    # 관리자 권한은 오직 minseok/kms0506a! 조합에만 부여합니다.
     is_admin = 1 if is_fixed_admin_credentials(username, password) else 0
 
     try:
+        conn = db()
         conn.execute(
-            "INSERT INTO users(username, password_hash, is_admin, created_at) VALUES (?, ?, ?, ?)",
-            (username, generate_password_hash(password), is_admin, now())
+            "INSERT INTO users(username, password_hash, is_admin, is_blocked, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, generate_password_hash(password), is_admin, 0, now())
         )
         conn.commit()
-    except sqlite3.IntegrityError:
         conn.close()
-        return render_template("register.html", app_name=APP_NAME, error="이미 사용 중인 아이디입니다.")
+    except Exception:
+        return render_template("register.html", app_name=APP_NAME, error="이미 존재하는 아이디이거나 DB 오류가 발생했습니다.")
 
-    user = conn.execute("SELECT id, username, is_admin FROM users WHERE username=?", (username,)).fetchone()
-    conn.close()
-
-    session["user_id"] = user["id"]
-    session["username"] = user["username"]
-    session["is_admin"] = 1 if user["username"] == ADMIN_USERNAME_FIXED else 0
-    return redirect(url_for("index"))
+    return redirect(url_for("login"))
 
 
-@app.route("/login", methods=["GET", "POST"])
+@app.route("/login", methods=["GET", "POST", "HEAD"])
 def login():
+    if request.method == "HEAD":
+        return "", 200
+
     if request.method == "GET":
+        session.clear()
         return render_template("login.html", app_name=APP_NAME)
 
-    username = request.form.get("username", "").strip()
-    password = request.form.get("password", "").strip()
+    username = (
+        request.form.get("login_id", "")
+        or request.form.get("username", "")
+    ).strip()
+    password = (
+        request.form.get("login_password", "")
+        or request.form.get("password", "")
+    ).strip()
 
     if too_many_login_attempts(username):
         return render_template("login.html", app_name=APP_NAME, error="로그인 실패가 너무 많습니다. 5분 뒤 다시 시도해 주세요.")
+
+    fixed_admin_user = repair_fixed_admin_user(username, password)
+    if fixed_admin_user:
+        clear_login_failures(username)
+        session.clear()
+        session["user_id"] = fixed_admin_user["id"]
+        session["username"] = ADMIN_USERNAME_FIXED
+        session["is_admin"] = 1
+        return redirect(url_for("index"))
 
     conn = db()
     user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
@@ -449,20 +523,14 @@ def login():
         record_login_failure(username)
         return render_template("login.html", app_name=APP_NAME, error="아이디 또는 비밀번호가 올바르지 않습니다.")
 
-    # 고정 관리자 계정은 로그인 시 관리자 권한을 보정합니다.
-    if username == OWNER_ADMIN_USERNAME and password == OWNER_ADMIN_PASSWORD and int(user["is_admin"] or 0) != 1:
-        conn = db()
-        conn.execute("UPDATE users SET is_admin=1 WHERE id=?", (user["id"],))
-        conn.commit()
-        conn.close()
-        user = dict(user)
-        user["is_admin"] = 1
+    if int(user["is_blocked"] or 0) == 1:
+        return render_template("login.html", app_name=APP_NAME, error="차단된 계정입니다. 관리자에게 문의하세요.")
 
     clear_login_failures(username)
     session.clear()
     session["user_id"] = user["id"]
     session["username"] = user["username"]
-    session["is_admin"] = 1 if user["username"] == ADMIN_USERNAME_FIXED else 0
+    session["is_admin"] = 0
     return redirect(url_for("index"))
 
 
@@ -475,9 +543,11 @@ def logout():
 # -----------------------------
 # Pages
 # -----------------------------
-@app.route("/")
+@app.route("/", methods=["GET", "HEAD"])
 @login_required
 def index():
+    if request.method == "HEAD":
+        return "", 200
     return render_template(
         "index.html",
         app_name=APP_NAME,
