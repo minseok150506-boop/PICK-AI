@@ -13,7 +13,7 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
-from flask import Response, Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Response, Flask, jsonify, redirect, render_template, request, session, url_for, stream_with_context
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -859,41 +859,54 @@ def admin_llm_page():
 @app.route("/api/chats/<int:chat_id>/stream", methods=["POST"])
 @login_required
 def api_stream_chat(chat_id):
+    user_id = session.get("user_id")
     text = normalize_chat_text(request.form.get("message", ""))
+
     if not text:
         return Response("data: [ERROR] 메시지가 비어 있습니다.\\n\\n", mimetype="text/event-stream")
 
-    owner = get_owned_chat_or_403(chat_id) if "get_owned_chat_or_403" in globals() else None
-    if not owner:
-        conn = db()
-        owner = conn.execute("SELECT id, title FROM chats WHERE id=? AND user_id=?", (chat_id, session["user_id"])).fetchone()
-        conn.close()
+    conn = db()
+    owner = conn.execute(
+        "SELECT id, title FROM chats WHERE id=? AND user_id=?",
+        (chat_id, user_id)
+    ).fetchone()
+    conn.close()
 
     if not owner:
         return Response("data: [ERROR] 권한이 없습니다.\\n\\n", mimetype="text/event-stream", status=403)
 
     def sse(data):
-        data = str(data or "").replace("\r\n", "\n").replace("\r", "\n")
-        data = data.replace("\n", "\\n")
+        data = str(data or "").replace("\\r\\n", "\\n").replace("\\r", "\\n")
+        data = data.replace("\\n", "\\\\n")
         return f"data: {data}\\n\\n"
 
+    @stream_with_context
     def generate():
         full_reply = ""
         try:
             conn = db()
-            current_chat = conn.execute("SELECT title FROM chats WHERE id=? AND user_id=?", (chat_id, session["user_id"])).fetchone()
+            current_chat = conn.execute(
+                "SELECT title FROM chats WHERE id=? AND user_id=?",
+                (chat_id, user_id)
+            ).fetchone()
             old_title = (current_chat["title"] if current_chat else "") or ""
+
             conn.execute(
                 "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                 (chat_id, "user", text, now())
             )
+
             if old_title.strip() in ("", "새 채팅"):
                 conn.execute(
-                    "UPDATE chats SET title=?, updated_at=? WHERE id=?",
-                    (text[:20] or "새 채팅", now(), chat_id)
+                    "UPDATE chats SET title=?, updated_at=? WHERE id=? AND user_id=?",
+                    (text[:20] or "새 채팅", now(), chat_id, user_id)
                 )
             else:
-                conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
+                conn.execute(
+                    "UPDATE chats SET updated_at=? WHERE id=? AND user_id=?",
+                    (now(), chat_id, user_id)
+                )
+
             conn.commit()
             conn.close()
 
@@ -910,13 +923,17 @@ def api_stream_chat(chat_id):
                 "INSERT INTO messages(chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
                 (chat_id, "assistant", full_reply, now())
             )
-            conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
+            conn.execute(
+                "UPDATE chats SET updated_at=? WHERE id=? AND user_id=?",
+                (now(), chat_id, user_id)
+            )
             conn.commit()
             conn.close()
+
             yield "data: [DONE]\\n\\n"
 
         except Exception as e:
-            print("[PICK STREAM ERROR]", repr(e))
+            print("[PICK STREAM CONTEXT FIX ERROR]", repr(e))
             traceback.print_exc()
             msg = "채팅 처리 중 서버 오류가 발생했습니다. Render Logs를 확인해 주세요."
             try:
@@ -935,7 +952,11 @@ def api_stream_chat(chat_id):
     return Response(
         generate(),
         mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive"
+        }
     )
 
 

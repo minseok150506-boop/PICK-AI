@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#6D5DFC">
   <link rel="manifest" href="/static/manifest.json">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version|default("stream-context-final-20260505") }}">
 </head>
 <body>
 <div class="app">
@@ -51,6 +51,6 @@
   </main>
 </div>
 
-<script src="/static/app.js?v={{ asset_version }}"></script>
+<script src="/static/app.js?v={{ asset_version|default("stream-context-final-20260505") }}"></script>
 </body>
 </html>
