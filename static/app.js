@@ -516,3 +516,223 @@ async function sendMessage(){
     input.focus();
   }
 }
+
+
+/* ===== PICK empty bubble + spacing final fix ===== */
+function pickCleanTokenNoBlank(token){
+  return String(token || '')
+    .replaceAll('\\n', '\n')
+    .replace(/^\s+/, '');
+}
+
+async function sendMessage(){
+  if(isSending) return;
+
+  const input = qs('messageInput');
+  const text = input.value.trim();
+  if(!text) return;
+
+  if(!currentChatId){
+    await newChat();
+  }
+
+  isSending = true;
+  qs('sendBtn').disabled = true;
+  qs('sendBtn').textContent = '...';
+
+  addMessage('user', text);
+  input.value = '';
+  growInput();
+
+  let botSpan = null;
+  let gotAnyToken = false;
+
+  function ensureBotBubble(){
+    if(!botSpan){
+      botSpan = addMessage('assistant', '');
+      const row = botSpan.closest('.msg-row');
+      if(row) row.classList.add('assistant-live');
+    }
+    return botSpan;
+  }
+
+  try{
+    const form = new FormData();
+    form.append('message', text);
+
+    const res = await fetch(`/api/chats/${currentChatId}/stream`, {
+      method:'POST',
+      body:form,
+      headers:{'Cache-Control':'no-cache'}
+    });
+
+    if(!res.ok || !res.body){
+      throw new Error('stream failed');
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+
+      buffer += decoder.decode(value, {stream:true});
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for(const part of parts){
+        if(!part.startsWith('data:')) continue;
+
+        let token = part.slice(5).trimStart();
+
+        if(token === '[DONE]') continue;
+
+        if(token.startsWith('[ERROR]')){
+          token = token.replace('[ERROR]', '').trim();
+        }
+
+        token = pickCleanTokenNoBlank(token);
+        if(!token) continue;
+
+        gotAnyToken = true;
+        ensureBotBubble().textContent += token;
+        qs('messageArea').scrollTop = qs('messageArea').scrollHeight;
+      }
+    }
+
+    if(!gotAnyToken){
+      ensureBotBubble().textContent = '응답이 비어 있습니다. OPENAI_API_KEY 설정과 Render Logs를 확인해 주세요.';
+    }
+
+    await loadChats();
+
+  }catch(e){
+    ensureBotBubble().textContent = '응답 처리 중 오류가 발생했습니다. OPENAI_API_KEY 설정과 Render Logs를 확인해 주세요.';
+  }finally{
+    isSending = false;
+    qs('sendBtn').disabled = false;
+    qs('sendBtn').textContent = '전송';
+    input.focus();
+  }
+}
+
+
+/* ===== compact addMessage override ===== */
+function addMessage(role, text, id=null){
+  const area = qs('messageArea');
+  const row = document.createElement('div');
+  row.className = 'msg-row ' + role;
+  row.dataset.messageId = id || '';
+
+  const isUser = role === 'user';
+  row.innerHTML = `
+    ${role === 'assistant' ? '<div class="avatar">P</div>' : ''}
+    <div class="msg-stack">
+      <div class="msg-name">${isUser ? '나' : 'PICK'}</div>
+      <div class="bubble ${role}">
+        <span class="message-text"></span>
+        ${id ? `<div class="message-tools">
+          ${isUser ? `<button onclick="editMessage(${id})">수정</button>` : ''}
+          <button onclick="deleteMessage(${id})">삭제</button>
+        </div>` : ''}
+      </div>
+      <div class="msg-time">${timeNow()}</div>
+    </div>
+  `;
+  const span = row.querySelector('.message-text');
+  span.textContent = cleanBubbleText ? cleanBubbleText(fixPick(text || '')) : fixPick(text || '');
+  area.appendChild(row);
+  area.scrollTop = area.scrollHeight;
+  return span;
+}
+
+
+/* ===== PICK Ollama complete frontend ===== */
+function pickCleanTokenComplete(token){
+  return String(token || '').replaceAll('\\n', '\n').replace(/^\s+/, '');
+}
+
+async function sendMessage(){
+  if(isSending) return;
+  const input = qs('messageInput');
+  const text = input.value.trim();
+  if(!text) return;
+
+  if(!currentChatId){
+    await newChat();
+  }
+
+  isSending = true;
+  qs('sendBtn').disabled = true;
+  qs('sendBtn').textContent = '...';
+
+  addMessage('user', text);
+  input.value = '';
+  growInput();
+
+  let botSpan = null;
+  let gotAnyToken = false;
+
+  function ensureBotBubble(){
+    if(!botSpan){
+      botSpan = addMessage('assistant', '');
+    }
+    return botSpan;
+  }
+
+  try{
+    const form = new FormData();
+    form.append('message', text);
+
+    const res = await fetch(`/api/chats/${currentChatId}/stream`, {
+      method:'POST',
+      body:form,
+      headers:{'Cache-Control':'no-cache'}
+    });
+
+    if(!res.ok || !res.body) throw new Error('stream failed');
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+
+      buffer += decoder.decode(value, {stream:true});
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for(const part of parts){
+        if(!part.startsWith('data:')) continue;
+        let token = part.slice(5).trimStart();
+        if(token === '[DONE]') continue;
+        if(token.startsWith('[ERROR]')) token = token.replace('[ERROR]', '').trim();
+
+        token = pickCleanTokenComplete(token);
+        if(!token) continue;
+
+        gotAnyToken = true;
+        ensureBotBubble().textContent += token;
+        qs('messageArea').scrollTop = qs('messageArea').scrollHeight;
+      }
+    }
+
+    if(!gotAnyToken){
+      ensureBotBubble().textContent = '잠시 후 다시 시도해 주세요.';
+    }
+
+    await loadChats();
+
+  }catch(e){
+    ensureBotBubble().textContent = navigator.onLine ? '오류가 발생했습니다. 잠시 후 다시 시도해 주세요.' : '인터넷 연결을 확인해 주세요.';
+  }finally{
+    isSending = false;
+    qs('sendBtn').disabled = false;
+    qs('sendBtn').textContent = '전송';
+    input.focus();
+  }
+}

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>PICK GPT 연결 테스트</title>
+  <title>PICK AI 연결 테스트</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="admin-dashboard-body">
@@ -27,14 +27,22 @@
       </div>
     </header>
     <section class="admin-content">
-      <h1>GPT 연결 테스트</h1>
+      <h1>AI 연결 테스트</h1>
       <section class="admin-panel">
         <table class="admin-table">
           <tr><th>항목</th><th>상태</th></tr>
-          <tr><td>OPENAI_API_KEY</td><td>{{ key_status }}</td></tr>
+          <tr><td>제공자</td><td>{{ provider }}</td></tr>
           <tr><td>모델</td><td>{{ model }}</td></tr>
-          <tr><td>테스트 결과</td><td>{{ test_result }}</td></tr>
+          <tr><td>서버</td><td>{{ host }}</td></tr>
+          <tr><td>테스트 결과</td><td>{{ result }}</td></tr>
         </table>
+      </section>
+      <section class="admin-panel" style="margin-top:16px;">
+        <h2>Ollama 권장 설정</h2>
+        <pre class="code-box">PICK_AI_PROVIDER=ollama
+PICK_OLLAMA_MODEL=gemma3:12b
+PICK_OLLAMA_HOST=https://외부에서_접속가능한_주소</pre>
+        <p class="admin-muted">Render는 사용자 PC의 localhost에 직접 접속할 수 없습니다. Cloudflare Tunnel 또는 ngrok 주소를 PICK_OLLAMA_HOST에 넣어야 합니다.</p>
       </section>
     </section>
   </main>

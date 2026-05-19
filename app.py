@@ -1,3 +1,4 @@
+import urllib.error
 import traceback
 from openai import OpenAI
 import urllib.request
@@ -18,7 +19,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 
 APP_NAME = "PICK"
-ASSET_VERSION = "stable-gpt-20260505"
+ASSET_VERSION = "ollama-complete-20260505"
 ADMIN_USERNAME_FIXED = "minseok"
 ADMIN_PASSWORD_FIXED = "kms0506a!"
 OPENAI_MODEL = os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini")
@@ -253,13 +254,31 @@ def clean_reply(text: str) -> str:
 
 
 # -----------------------------
-# Stable GPT connection
+# PICK AI Engine: OpenAI + Ollama
 # -----------------------------
+def get_ai_provider():
+    # openai 또는 ollama
+    return os.environ.get("PICK_AI_PROVIDER", "ollama").strip().lower()
+
 def get_openai_key():
     return os.environ.get("OPENAI_API_KEY", "").strip()
 
 def get_openai_model():
     return os.environ.get("PICK_OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+
+def get_ollama_host():
+    return os.environ.get("PICK_OLLAMA_HOST", "http://localhost:11434").strip().rstrip("/")
+
+
+def get_ollama_model_candidates():
+    configured = os.environ.get("PICK_OLLAMA_MODEL", "auto").strip()
+    if configured and configured.lower() != "auto":
+        return [configured]
+    return ["gemma3:12b", "qwen3:8b", "llama3.1:8b", "mistral"]
+
+def get_ollama_model():
+    configured = os.environ.get("PICK_OLLAMA_MODEL", "gemma3:12b").strip() or "gemma3:12b"
+    return configured
 
 def has_openai_key():
     key = get_openai_key()
@@ -273,10 +292,11 @@ def build_conversation_messages(chat_id, user_text: str):
                 "너는 PICK이라는 한국어 AI 챗봇이다. 제작자는 김민석이다. "
                 "항상 한국어 존댓말로 답한다. 사용자의 오타, 줄임말, 어색한 표현을 적극적으로 해석한다. "
                 "질문을 회피하지 말고 바로 답한다. 모르면 모른다고 말하고 가능한 대안을 제시한다. "
-                "불필요하게 다시 물어보지 말고, 가능한 답을 먼저 준다."
+                "불필요하게 '더 자세히 말해 주세요'라고 반복하지 않는다."
             )
         }
     ]
+
     try:
         conn = db()
         rows = conn.execute(
@@ -284,49 +304,42 @@ def build_conversation_messages(chat_id, user_text: str):
             (chat_id,)
         ).fetchall()
         conn.close()
+
         for r in reversed(rows):
             role = r["role"]
             content = normalize_chat_text(r["content"])
             if role in ("user", "assistant") and content:
                 messages.append({"role": role, "content": content})
     except Exception:
-        print("[PICK] conversation memory load failed")
+        print("[PICK] memory load failed")
         traceback.print_exc()
+
     messages.append({"role": "user", "content": normalize_chat_text(user_text)})
     return messages
 
+def ollama_prompt_from_messages(messages):
+    parts = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            parts.append(f"[시스템]\n{content}")
+        elif role == "assistant":
+            parts.append(f"[PICK]\n{content}")
+        else:
+            parts.append(f"[사용자]\n{content}")
+    parts.append("[PICK]\n")
+    return "\n\n".join(parts)
+
 def fallback_ai_reply(user_text: str) -> str:
-    t = normalize_chat_text(user_text)
-    if not t:
-        return "메시지를 입력해 주세요."
-    if not has_openai_key():
-        return (
-            "GPT 연결이 아직 설정되지 않았습니다. Render Environment에서 "
-            "환경변수 이름을 정확히 OPENAI_API_KEY로 넣어야 합니다. "
-            "OPENAI_API KEY처럼 공백이 있으면 인식하지 못합니다."
-        )
-    return "GPT 연결 중 오류가 발생했습니다. Render Logs에서 [PICK GPT ERROR]를 확인해 주세요."
+    provider = get_ai_provider()
+    if provider == "ollama":
+        return "AI 서버에 연결하지 못했습니다. 인터넷 연결 또는 Ollama 서버 주소를 확인해 주세요."
+    return "오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
-def gpt_ai_reply(chat_id, user_text: str) -> str:
+def openai_stream(chat_id, user_text: str):
     if not has_openai_key():
-        return fallback_ai_reply(user_text)
-    try:
-        client = OpenAI(api_key=get_openai_key())
-        res = client.chat.completions.create(
-            model=get_openai_model(),
-            messages=build_conversation_messages(chat_id, user_text),
-            temperature=0.35,
-            max_tokens=1200,
-        )
-        return normalize_chat_text(res.choices[0].message.content or "")
-    except Exception as e:
-        print("[PICK GPT ERROR] non-stream request failed:", repr(e))
-        traceback.print_exc()
-        return "GPT 호출에 실패했습니다. API 키, 결제 상태, 모델 이름을 확인해 주세요."
-
-def gpt_ai_stream(chat_id, user_text: str):
-    if not has_openai_key():
-        yield fallback_ai_reply(user_text)
+        yield "OpenAI API 키가 설정되지 않았습니다."
         return
     try:
         client = OpenAI(api_key=get_openai_key())
@@ -347,11 +360,88 @@ def gpt_ai_stream(chat_id, user_text: str):
             except Exception:
                 continue
         if not emitted:
-            yield "GPT 응답이 비어 있습니다. 다시 질문해 주세요."
+            yield "잠시 후 다시 시도해 주세요."
     except Exception as e:
-        print("[PICK GPT ERROR] stream request failed:", repr(e))
+        print("[PICK OPENAI ERROR]", repr(e))
         traceback.print_exc()
-        yield "GPT 호출에 실패했습니다. API 키, 결제 상태, 모델 이름을 확인해 주세요."
+        yield "오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+
+def ollama_stream(chat_id, user_text: str):
+    try:
+        messages = build_conversation_messages(chat_id, user_text)
+        emitted = False
+        last_error = None
+
+        for model_name in get_ollama_model_candidates():
+            try:
+                payload = {
+                    "model": model_name,
+                    "prompt": ollama_prompt_from_messages(messages),
+                    "stream": True,
+                    "options": {
+                        "temperature": 0.35,
+                        "top_p": 0.9,
+                        "num_predict": 1200
+                    }
+                }
+
+                data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{get_ollama_host()}/api/generate",
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+
+                with urllib.request.urlopen(req, timeout=180) as res:
+                    for raw in res:
+                        if not raw:
+                            continue
+                        try:
+                            item = json.loads(raw.decode("utf-8"))
+                            token = item.get("response", "")
+                            if token:
+                                emitted = True
+                                yield token
+                            if item.get("done"):
+                                break
+                        except Exception:
+                            continue
+
+                if emitted:
+                    break
+
+            except Exception as e:
+                last_error = e
+                print(f"[PICK OLLAMA MODEL FAIL] {model_name}: {repr(e)}")
+                continue
+
+        if not emitted:
+            if last_error:
+                raise last_error
+            yield "잠시 후 다시 시도해 주세요."
+
+    except urllib.error.URLError as e:
+        print("[PICK OLLAMA NETWORK ERROR]", repr(e))
+        traceback.print_exc()
+        yield "AI 서버에 연결하지 못했습니다. 인터넷 연결 또는 Ollama 서버 주소를 확인해 주세요."
+    except Exception as e:
+        print("[PICK OLLAMA ERROR]", repr(e))
+        traceback.print_exc()
+        yield "오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+
+def gpt_ai_stream(chat_id, user_text: str):
+    provider = get_ai_provider()
+    if provider == "openai":
+        yield from openai_stream(chat_id, user_text)
+    else:
+        yield from ollama_stream(chat_id, user_text)
+
+def gpt_ai_reply(chat_id, user_text: str) -> str:
+    text = ""
+    for token in gpt_ai_stream(chat_id, user_text):
+        text += token
+    return normalize_chat_text(text)
 
 def local_ai_reply(user_text: str) -> str:
     return fallback_ai_reply(user_text)
@@ -911,12 +1001,15 @@ def api_stream_chat(chat_id):
             conn.close()
 
             for token in gpt_ai_stream(chat_id, text):
+                token = str(token or "")
+                if not token:
+                    continue
                 full_reply += token
                 yield sse(token)
 
             full_reply = normalize_chat_text(full_reply)
             if not full_reply:
-                full_reply = "응답이 비어 있습니다. 다시 질문해 주세요."
+                full_reply = "잠시 후 다시 시도해 주세요."
 
             conn = db()
             conn.execute(
@@ -929,13 +1022,12 @@ def api_stream_chat(chat_id):
             )
             conn.commit()
             conn.close()
-
             yield "data: [DONE]\\n\\n"
 
         except Exception as e:
-            print("[PICK STREAM CONTEXT FIX ERROR]", repr(e))
+            print("[PICK STREAM ERROR]", repr(e))
             traceback.print_exc()
-            msg = "채팅 처리 중 서버 오류가 발생했습니다. Render Logs를 확인해 주세요."
+            msg = "오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
             try:
                 conn = db()
                 conn.execute(
@@ -1005,6 +1097,32 @@ def no_cache_headers(response):
     if request.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
+
+
+@app.route("/admin/ai-test")
+@admin_required
+def admin_ai_test():
+    provider = get_ai_provider()
+    model = ", ".join(get_ollama_model_candidates()) if provider == "ollama" else get_openai_model()
+    host = get_ollama_host() if provider == "ollama" else "OpenAI API"
+    result = ""
+    try:
+        for token in gpt_ai_stream(0, "PICK AI 연결 테스트입니다. 정상이라면 짧게 대답하세요."):
+            result += token
+            if len(result) > 500:
+                break
+        result = normalize_chat_text(result)
+    except Exception as e:
+        result = f"실패: {type(e).__name__}: {e}"
+
+    return render_template(
+        "admin_ai_test.html",
+        app_name=APP_NAME,
+        provider=provider,
+        model=model,
+        host=host,
+        result=result or "잠시 후 다시 시도해 주세요."
+    )
 
 # -----------------------------
 # API

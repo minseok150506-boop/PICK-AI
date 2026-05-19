@@ -1,0 +1,16 @@
+Render → Environment에 넣을 값
+
+무료 Ollama 사용:
+PICK_AI_PROVIDER=ollama
+PICK_OLLAMA_MODEL=gemma3:12b
+PICK_OLLAMA_HOST=https://여기에_trycloudflare_주소
+
+더 자연스러운 한국어 대화 추천:
+PICK_AI_PROVIDER=ollama
+PICK_OLLAMA_MODEL=qwen3:8b
+PICK_OLLAMA_HOST=https://여기에_trycloudflare_주소
+
+OpenAI API 사용 시:
+PICK_AI_PROVIDER=openai
+OPENAI_API_KEY=sk-실제키
+PICK_OPENAI_MODEL=gpt-4o-mini
