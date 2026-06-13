@@ -269,8 +269,12 @@ def api_chat_send(chat_id):
         reply = ask_ollama(message, chat_id, user_id)
         save_message(chat_id, user_id, "assistant", reply)
         return jsonify({"ok": True, "filtered": False, "reply": reply})
-    except Exception:
-        return jsonify({"ok": False, "error": "AI 서버에 연결하지 못했습니다. Ollama와 Cloudflare Tunnel 상태를 확인해 주세요."})
+    except Exception as e:
+    print("OLLAMA ERROR:", str(e))
+    return jsonify({
+        "ok": False,
+        "error": str(e)
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
