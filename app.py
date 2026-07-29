@@ -1,12 +1,8 @@
-
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os, re, sqlite3, requests, urllib.parse, html, math
-import requests
-import os
-import json
 
 app = Flask(__name__)
 SERPER_API_KEY = "여기에_API키"
