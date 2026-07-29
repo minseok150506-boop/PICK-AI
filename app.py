@@ -4,8 +4,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os, re, sqlite3, requests, urllib.parse, html, math
+import requests
+import os
+import json
 
 app = Flask(__name__)
+SERPER_API_KEY = "여기에_API키"
+
+OLLAMA_URL = os.getenv(
+    "OLLAMA_URL",
+    "http://localhost:11434"
+)
+
+memory=[]
 app.secret_key = os.environ.get("SECRET_KEY", "pick-v5-brain-ollama-secret")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -468,3 +479,38 @@ def api_delete_chat(chat_id):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+
+def web_search(query):
+
+    url="https://google.serper.dev/search"
+
+    headers={
+        "X-API-KEY":SERPER_API_KEY,
+        "Content-Type":"application/json"
+    }
+
+    r=requests.post(
+        url,
+        headers=headers,
+        json={"q":query},
+        timeout=20
+    )
+
+    result=r.json()
+
+    text=""
+
+    if "organic" in result:
+
+        for item in result["organic"][:5]:
+
+            text+=f"""
+제목:{item['title']}
+
+내용:{item['snippet']}
+
+링크:{item['link']}
+
+"""
+
+    return text
