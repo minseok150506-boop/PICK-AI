@@ -286,6 +286,8 @@ pick_engine = PickEngine()
 pick_llm = PickLLMRouter()
 pick_typo = PickTypoEngine()
 app.secret_key = os.environ.get("PICK_SECRET_KEY", "pick_secret_change_me")
+ADMIN_USERNAME = os.environ.get("PICK_ADMIN_USERNAME", "minseok")
+ADMIN_PASSWORD = os.environ.get("PICK_ADMIN_PASSWORD", "kms0506a!")
 
 user_states = {}
 
@@ -339,6 +341,18 @@ def init_db():
       content TEXT NOT NULL,
       created_at TEXT NOT NULL
     )""")
+
+    # 관리자 계정은 새 데이터베이스에서도 회원가입 없이 바로 로그인할 수 있도록 보장합니다.
+    admin = cur.execute("SELECT id FROM users WHERE username=?", (ADMIN_USERNAME,)).fetchone()
+    admin_hash = generate_password_hash(ADMIN_PASSWORD)
+    if admin:
+        cur.execute("UPDATE users SET password_hash=? WHERE id=?", (admin_hash, admin["id"]))
+    else:
+        cur.execute(
+            "INSERT INTO users(username, password_hash, created_at) VALUES(?,?,?)",
+            (ADMIN_USERNAME, admin_hash, now())
+        )
+
     conn.commit()
     conn.close()
 
@@ -969,8 +983,9 @@ def enforce_polite_pick_reply(text):
 def index():
     if not logged_in():
         return render_template("auth.html")
-    return render_template("app.html", username=session["username"])
+    return render_template("app.html", username=session["username"], is_admin=(session.get("username") == ADMIN_USERNAME))
 
+@app.get("/api/bootstrap")
 def api_bootstrap():
     auth_err = require_login_json()
     if auth_err:
@@ -988,6 +1003,13 @@ def api_bootstrap():
         "requests": requests_rows,
     })
 
+def user_owns_chat(chat_id: int, user_id: int) -> bool:
+    conn = db()
+    row = conn.execute("SELECT id FROM chats WHERE id=? AND user_id=?", (chat_id, user_id)).fetchone()
+    conn.close()
+    return row is not None
+
+
 @app.post("/api/chat/new")
 def api_chat_new():
     auth_err = require_login_json()
@@ -1001,6 +1023,8 @@ def api_chat_get(chat_id):
     auth_err = require_login_json()
     if auth_err:
         return auth_err
+    if not user_owns_chat(chat_id, current_user_id()):
+        return jsonify({"ok": False, "error": "채팅을 찾을 수 없습니다."}), 404
     return jsonify({"ok": True, "messages": get_messages(chat_id)})
 
 @app.post("/api/chat/<int:chat_id>/delete")
@@ -1008,6 +1032,8 @@ def api_chat_delete(chat_id):
     auth_err = require_login_json()
     if auth_err:
         return auth_err
+    if not user_owns_chat(chat_id, current_user_id()):
+        return jsonify({"ok": False, "error": "채팅을 찾을 수 없습니다."}), 404
     conn = db()
     conn.execute("DELETE FROM messages WHERE chat_id=?", (chat_id,))
     conn.execute("DELETE FROM chats WHERE id=? AND user_id=?", (chat_id, current_user_id()))
@@ -1020,6 +1046,8 @@ def api_chat_send(chat_id):
     auth_err = require_login_json()
     if auth_err:
         return auth_err
+    if not user_owns_chat(chat_id, current_user_id()):
+        return jsonify({"ok": False, "error": "채팅을 찾을 수 없습니다."}), 404
     text = request.form.get("message", "").strip()
     if not text:
         return jsonify({"ok": False, "error": "빈 메시지입니다."}), 400
@@ -1249,9 +1277,13 @@ def register():
 
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "").strip()
+    password2 = request.form.get("password2", password).strip()
 
-    if has_korean(username) or has_korean(password):
-        return render_template("register.html", error="아이디와 비밀번호에는 한글을 사용할 수 없습니다.")
+    if has_korean(username) or has_korean(password) or has_korean(password2):
+        return render_template("register.html", error="아이디 또는 비밀번호에 한글을 사용할 수 없습니다.")
+
+    if password != password2:
+        return render_template("register.html", error="비밀번호 확인이 일치하지 않습니다.")
 
     if not valid_account_text(username, allow_symbols=False):
         return render_template("register.html", error="아이디는 영어, 숫자, _, - 만 사용할 수 있으며 2~32자여야 합니다.")
@@ -1286,6 +1318,9 @@ def login():
     username = request.form.get("username", "").strip()
     password = request.form.get("password", "").strip()
 
+    if has_korean(username) or has_korean(password):
+        return render_template("login.html", error="아이디 또는 비밀번호에 한글을 사용할 수 없습니다.")
+
     conn = db()
     user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
     conn.close()
@@ -1306,6 +1341,8 @@ def logout():
 @app.route("/admin/status")
 @login_required
 def admin_status():
+    if session.get("username") != ADMIN_USERNAME:
+        return "관리자만 접근할 수 있습니다.", 403
     conn = db()
     users = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
     convs = conn.execute("SELECT COUNT(*) AS c FROM conversations").fetchone()["c"]
@@ -1314,6 +1351,8 @@ def admin_status():
     conn.close()
     return render_template("admin_status.html", users=users, convs=convs, msgs=msgs, logs=logs)
 
+# Gunicorn/Render로 실행할 때도 데이터베이스와 관리자 계정을 준비합니다.
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     app.run(host="0.0.0.0", port=5000, debug=False)

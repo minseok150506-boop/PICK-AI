@@ -11,10 +11,22 @@ a{color:#c4b5fd}.error{background:rgba(239,68,68,.15);padding:10px;border-radius
 <h1>PICK 로그인</h1>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
+<p style="color:#a1a1aa">회원가입한 계정만 로그인할 수 있습니다. 관리자 계정은 바로 로그인할 수 있습니다.</p>
 <form method="post">
 <input name="username" placeholder="아이디" required>
 <input name="password" placeholder="비밀번호" type="password" required>
 <button>로그인</button>
 </form>
 <p>계정이 없으신가요? <a href="/register">회원가입</a></p>
-</div></body></html>
+</div>
+<script>
+function warnKorean(e){
+  if(/[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(e.target.value)){
+    e.target.setCustomValidity('아이디 또는 비밀번호에 한글을 사용할 수 없습니다.');
+  }else{
+    e.target.setCustomValidity('');
+  }
+}
+document.querySelectorAll('input[name="username"], input[name="password"]').forEach(el=>el.addEventListener('input', warnKorean));
+</script>
+</body></html>

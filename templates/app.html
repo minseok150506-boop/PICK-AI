@@ -26,7 +26,11 @@
       <div class="home-wrap">
         <div class="logo">PICK</div>
         <div class="greeting">무엇을 도와드릴까요?</div>
-        
+        <div class="home-composer">
+          <textarea id="homeMessageInput" rows="1" placeholder="PICK에게 메시지 보내기"></textarea>
+          <button class="send-btn" type="button" onclick="startChatFromHome()">전송</button>
+        </div>
+        <button class="home-new-chat" type="button" onclick="newChat()">+ 새 채팅 시작</button>
       </div>
     </section>
     <section id="chat" class="screen">
@@ -144,7 +148,36 @@ function renderMessages(messages){
 function renderProjects(){document.getElementById('projectList').innerHTML=state.projects.map(x=>`<div class="item"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(x.title)}</div><div>${escapeHtml(x.description)}</div></div>`).join('');}
 function renderRequests(){document.getElementById('requestList').innerHTML=state.requests.map(x=>`<div class="item">${escapeHtml(x.content)}</div>`).join('');}
 function escapeHtml(str){return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');}
-async function newChat(){const res=await fetch('/api/chat/new',{method:'POST'});const data=await res.json();state.currentChatId=data.chat_id;state.chats=data.chats;renderChatList();renderMessages(data.messages);show('chat');}
+async function newChat(){
+  try{
+    const res=await fetch('/api/chat/new',{method:'POST'});
+    const data=await res.json();
+    if(!res.ok || !data.ok) throw new Error(data.error || '새 채팅을 만들지 못했습니다.');
+    state.currentChatId=data.chat_id;
+    state.chats=data.chats||[];
+    renderChatList();
+    renderMessages(data.messages||[]);
+    show('chat');
+    const input=document.getElementById('messageInput');
+    if(input) input.focus();
+    return data.chat_id;
+  }catch(e){
+    alert(e.message || '새 채팅을 만들지 못했습니다.');
+    return null;
+  }
+}
+async function startChatFromHome(){
+  const homeInput=document.getElementById('homeMessageInput');
+  const text=(homeInput?.value||'').trim();
+  const chatId=await newChat();
+  if(!chatId) return;
+  if(text){
+    const input=document.getElementById('messageInput');
+    input.value=text;
+    homeInput.value='';
+    await sendMessage();
+  }
+}
 async function openChat(id){state.currentChatId=id;const res=await fetch('/api/chat/'+id);const data=await res.json();renderMessages(data.messages);show('chat');}
 async function deleteChat(id){const res=await fetch('/api/chat/'+id+'/delete',{method:'POST'});const data=await res.json();state.chats=data.chats;renderChatList();show('home');}
 
@@ -489,11 +522,18 @@ document.addEventListener('input', (e)=>{
   if(e.target && e.target.id === 'messageInput') autoGrowInput();
 });
 
+document.getElementById('homeMessageInput')?.addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter' && !e.shiftKey){
+    e.preventDefault();
+    startChatFromHome();
+  }
+});
+
 bootstrap();
 </script>
 
 <div class="service-links">
-  <a href="/admin/status">관리자 상태</a>
+  {% if is_admin %}<a href="/admin/status">관리자 상태</a>{% endif %}
   <a href="/logout">로그아웃</a>
 </div>
 

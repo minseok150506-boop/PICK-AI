@@ -8,9 +8,10 @@ $apiKey = Read-Host "Render API Key"
 $serviceId = Read-Host "Render Service ID (srv-로 시작)"
 $deployHook = Read-Host "Render Deploy Hook URL"
 
-Add-Type -AssemblyName System.Web
 $bytes = New-Object byte[] 32
-[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+$rng = New-Object System.Security.Cryptography.RNGCryptoServiceProvider
+$rng.GetBytes($bytes)
+$rng.Dispose()
 $token = [Convert]::ToBase64String($bytes).Replace('+','-').Replace('/','_').TrimEnd('=')
 
 $content = @"
@@ -26,5 +27,5 @@ CLOUDFLARED_PATH=cloudflared
 "@
 
 Set-Content -Path ".pick_tunnel.env" -Value $content -Encoding UTF8
-Write-Host "설정 저장 완료: .pick_tunnel.env" -ForegroundColor Green
-Write-Host "이제 start_quick_tunnel.bat 을 실행하세요." -ForegroundColor Green
+Write-Host "설정 완료: .pick_tunnel.env" -ForegroundColor Green
+Write-Host "이제 start_quick_tunnel.bat 파일을 실행하세요." -ForegroundColor Green
