@@ -1,0 +1,11 @@
+services:
+  pick:
+    build: .
+    container_name: pick-ai-service
+    ports:
+      - "5000:5000"
+    environment:
+      PICK_SECRET_KEY: "change-this-secret"
+      PICK_LLM_MODE: "local"
+    volumes:
+      - ./data:/app/data

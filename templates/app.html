@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PICK</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div id="app">
+  <aside class="sidebar">
+    <button class="sidebtn primary" onclick="newChat()">+ 새 채팅</button>
+
+    <div>
+      <div class="section-label">최근 채팅</div>
+      <div id="chatList" class="chat-list"></div>
+    </div>
+
+    <div class="userbox">
+      <div>{{ username }}</div>
+            <a class="sidebtn" href="/logout" style="display:block;text-decoration:none">로그아웃</a>
+    </div>
+  </aside>
+  <main class="main">
+    <section id="home" class="screen active center">
+      <div class="home-wrap">
+        <div class="logo">PICK</div>
+        <div class="greeting">무엇을 도와드릴까요?</div>
+        
+      </div>
+    </section>
+    <section id="chat" class="screen">
+      <div id="messageArea" class="message-area"></div>
+      <div class="composer-shell">
+        <div class="composer">
+          <button class="more-btn" onclick="toggleQuickMenu()">⋯</button>
+          <div id="quickMenu" class="quick-menu hidden">
+            <button class="quick-item" onclick="quickOpen('image')">이미지 분석</button>
+            <button class="quick-item" onclick="quickOpen('video')">동영상 분석</button>
+            <button class="quick-item" onclick="quickPrompt('PPT 만들어줘')">PPT 만들기</button>
+            <button class="quick-item" onclick="quickOpen('exe')">EXE 만들기</button>
+            <button class="quick-item" onclick="quickPrompt('사이트 추천해줘')">사이트 추천</button>
+          </div>
+          <textarea id="messageInput" rows="1" placeholder="PICK에게 메시지 보내기"></textarea>
+          <button class="send-btn" onclick="sendMessage()">전송</button>
+        </div>
+      </div>
+    </section>
+    <section id="project" class="screen panel-screen">
+      <div class="panel">
+        <h2>프로젝트 만들기</h2>
+        <input id="projectTitle" class="input" type="text" placeholder="프로젝트 이름">
+        <textarea id="projectDesc" class="input" style="min-height:140px;resize:vertical" placeholder="설명"></textarea>
+        <button class="main-btn" onclick="saveProject()">저장</button>
+        <div id="projectList"></div>
+      </div>
+    </section>
+    <section id="request" class="screen panel-screen">
+      <div class="panel">
+        <h2>요청하기</h2>
+        <textarea id="requestText" class="input" style="min-height:140px;resize:vertical" placeholder="요청 내용을 입력하세요"></textarea>
+        <button class="main-btn" onclick="saveRequest()">저장</button>
+        <div id="requestList"></div>
+      </div>
+    </section>
+    <section id="image" class="screen panel-screen">
+      <div class="panel"><h2>이미지 분석</h2><input type="file" id="imageFile"><button class="main-btn" onclick="analyzeUpload('image')">분석</button><pre id="imageResult" class="result-box">이미지는 파일 선택 또는 Ctrl+V 붙여넣기로 분석할 수 있습니다.</pre></div>
+    </section>
+    <section id="video" class="screen panel-screen">
+      <div class="panel"><h2>동영상 분석</h2><input type="file" id="videoFile"><button class="main-btn" onclick="analyzeUpload('video')">분석</button><pre id="videoResult" class="result-box">동영상은 파일 선택 또는 Ctrl+V로 파일을 붙여넣어 분석할 수 있습니다.</pre></div>
+    </section>
+    <section id="file" class="screen panel-screen">
+      <div class="panel"><h2>파일 분석</h2><input type="file" id="fileFile"><button class="main-btn" onclick="analyzeUpload('file')">분석</button><pre id="fileResult" class="result-box">업로드한 아무 파일이나 분석합니다.</pre></div>
+    </section>
+    <section id="exe" class="screen panel-screen">
+      <div class="panel">
+        <h2>EXE 빌드 도우미</h2>
+        <label>앱 이름</label><input id="exeName" class="input" type="text" value="my_app">
+        <label style="display:block;margin-top:12px">파이썬 코드</label>
+        <textarea id="exeCode" class="code-box">print("Hello from PICK")</textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="main-btn" onclick="downloadExeHelper('main.py')">main.py 다운로드</button>
+          <button class="main-btn" onclick="downloadExeHelper('build.bat')">build.bat 다운로드</button>
+          <button class="main-btn" onclick="downloadExeHelper('readme')">README 다운로드</button>
+        </div>
+        <div class="warn" style="margin-top:12px">실제 EXE를 브라우저 안에서 바로 만들지는 않습니다. 대신 빌드용 파일을 다운로드합니다.</div>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+let state = { chats: [], currentChatId: null, projects: [], requests: [] };
+let isSending = false;
+function show(id){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');}
+async function bootstrap(){const res=await fetch('/api/bootstrap');const data=await res.json();state.chats=data.chats||[];state.projects=data.projects||[];state.requests=data.requests||[];renderChatList();renderProjects();renderRequests();}
+function renderChatList(){const box=document.getElementById('chatList');box.innerHTML=state.chats.map(c=>`<div class="chat-row"><div class="chat-item" onclick="openChat(${c.id})">${escapeHtml(c.title||'새 채팅')}</div><button class="small-btn" onclick="deleteChat(${c.id})">삭제</button></div>`).join('');}
+
+
+function linkify(text){
+  return escapeHtml(String(text || '')).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank">$1</a>');
+}
+
+function nowTime(){
+  const d = new Date();
+  let h = d.getHours();
+  const m = String(d.getMinutes()).padStart(2,'0');
+  const ap = h >= 12 ? '오후' : '오전';
+  h = h % 12;
+  if(h === 0) h = 12;
+  return `${ap} ${h}:${m}`;
+}
+
+function renderMessages(messages){
+  const box = document.getElementById('messageArea');
+  const list = Array.isArray(messages) ? messages : [];
+
+  box.innerHTML = `
+    <div class="day-divider"><span>오늘</span></div>
+  ` + list.map(m => {
+    const roleName = m.role === 'user' ? '나' : 'PICK';
+    const avatar = m.role === 'user'
+      ? ''
+      : '<div class="avatar bot-avatar">P</div>';
+    const meta = `<div class="msg-time">${nowTime()}${m.role === 'user' ? ' <span class="check">✓</span>' : ''}</div>`;
+
+    return `
+      <div class="row ${m.role}">
+        ${avatar}
+        <div class="msg-stack ${m.role}">
+          <div class="outside-role">${roleName}</div>
+          <div class="bubble ${m.role}">
+            <div class="bubble-content">${linkify(m.content)}</div>
+          </div>
+          ${meta}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  requestAnimationFrame(() => {
+    box.scrollTop = box.scrollHeight;
+  });
+}
+function renderProjects(){document.getElementById('projectList').innerHTML=state.projects.map(x=>`<div class="item"><div style="font-weight:700;margin-bottom:6px">${escapeHtml(x.title)}</div><div>${escapeHtml(x.description)}</div></div>`).join('');}
+function renderRequests(){document.getElementById('requestList').innerHTML=state.requests.map(x=>`<div class="item">${escapeHtml(x.content)}</div>`).join('');}
+function escapeHtml(str){return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');}
+async function newChat(){const res=await fetch('/api/chat/new',{method:'POST'});const data=await res.json();state.currentChatId=data.chat_id;state.chats=data.chats;renderChatList();renderMessages(data.messages);show('chat');}
+async function openChat(id){state.currentChatId=id;const res=await fetch('/api/chat/'+id);const data=await res.json();renderMessages(data.messages);show('chat');}
+async function deleteChat(id){const res=await fetch('/api/chat/'+id+'/delete',{method:'POST'});const data=await res.json();state.chats=data.chats;renderChatList();show('home');}
+
+function showTyping(){
+  const box = document.getElementById('messageArea');
+  const old = document.getElementById('typingIndicator');
+  if(old) old.remove();
+
+  const row = document.createElement('div');
+  row.className = 'row bot';
+  row.id = 'typingIndicator';
+  row.innerHTML = `
+    <div class="avatar bot-avatar">P</div>
+    <div class="msg-stack bot">
+      <div class="outside-role">PICK</div>
+      <div class="bubble bot typing-bubble">
+        <div class="typing-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+  `;
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+}
+
+function hideTyping(){
+  const old = document.getElementById('typingIndicator');
+  if(old) old.remove();
+}
+
+async function analyzePastedFile(file){
+  const form = new FormData();
+  const safeName = file.name || (
+    file.type.startsWith('image/') ? 'pasted_image.png' :
+    file.type.startsWith('video/') ? 'pasted_video.mp4' :
+    'pasted_file'
+  );
+  form.append('file', file, safeName);
+
+  showPasteToast('붙여넣은 파일을 분석 중입니다...');
+
+  try{
+    const res = await fetch('/api/paste/analyze', {
+      method: 'POST',
+      body: form
+    });
+    const data = await res.json();
+
+    if(!data.ok){
+      showPasteToast(data.error || '분석 실패');
+      return;
+    }
+
+    if(data.kind === 'image'){
+      show('image');
+      const box = document.getElementById('imageResult');
+      if(box) box.textContent = data.result;
+    }else if(data.kind === 'video'){
+      show('video');
+      const box = document.getElementById('videoResult');
+      if(box) box.textContent = data.result;
+    }else{
+      show('file');
+      const box = document.getElementById('fileResult');
+      if(box) box.textContent = data.result;
+    }
+
+    showPasteToast('분석 완료');
+  }catch(e){
+    showPasteToast('붙여넣기 분석 중 오류가 발생했습니다.');
+  }
+}
+
+function showPasteToast(text){
+  let toast = document.getElementById('pasteToast');
+  if(!toast){
+    toast = document.createElement('div');
+    toast.id = 'pasteToast';
+    toast.className = 'paste-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = text;
+  toast.classList.add('show');
+  clearTimeout(window.__pasteToastTimer);
+  window.__pasteToastTimer = setTimeout(()=>{
+    toast.classList.remove('show');
+  }, 2200);
+}
+
+document.addEventListener('paste', async (e)=>{
+  const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
+  if(!items.length) return;
+
+  const fileItems = items.filter(item => item.kind === 'file');
+  if(!fileItems.length) return;
+
+  e.preventDefault();
+
+  for(const item of fileItems){
+    const file = item.getAsFile();
+    if(file){
+      await analyzePastedFile(file);
+      break;
+    }
+  }
+});
+
+
+/* ===== PICK final fast chat behavior ===== */
+function fixPickName(text){
+  return String(text || '')
+    .replace(/Plcker/gi, 'PICK')
+    .replace(/Picker/g, 'PICK')
+    .replace(/plcker/g, 'PICK');
+}
+
+function appendMessageImmediate(role, text, options={}){
+  const box = document.getElementById('messageArea');
+  if(!box) return null;
+
+  const row = document.createElement('div');
+  row.className = 'row ' + (role === 'bot' ? 'bot' : role);
+
+  const roleName = role === 'user' ? '나' : 'PICK';
+  const avatar = role === 'user' ? '' : '<div class="avatar bot-avatar">P</div>';
+
+  row.innerHTML = `
+    ${avatar}
+    <div class="msg-stack ${role === 'bot' ? 'bot' : role}">
+      <div class="outside-role">${roleName}</div>
+      <div class="bubble ${role === 'bot' ? 'bot' : role}">
+        <div class="bubble-content"></div>
+      </div>
+      <div class="msg-time">${new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'})}${role === 'user' ? ' <span class="check">✓</span>' : ''}</div>
+    </div>
+  `;
+
+  const content = row.querySelector('.bubble-content');
+  content.textContent = fixPickName(text);
+
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+  return content;
+}
+
+function typeTextInto(element, text, speed=12){
+  return new Promise(resolve=>{
+    const clean = fixPickName(text);
+    let i = 0;
+    element.textContent = '';
+
+    function step(){
+      if(i < clean.length){
+        const chunk = clean.slice(i, i + 2);
+        element.textContent += chunk;
+        i += 2;
+        const box = document.getElementById('messageArea');
+        if(box) box.scrollTop = box.scrollHeight;
+        setTimeout(step, speed);
+      }else{
+        resolve();
+      }
+    }
+    step();
+  });
+}
+
+function storeLocalMessage(role, text){
+  try{
+    const key = 'pick_local_messages_' + (state && state.currentChatId ? state.currentChatId : 'default');
+    const old = JSON.parse(localStorage.getItem(key) || '[]');
+    old.push({role, content: fixPickName(text), time: Date.now()});
+    localStorage.setItem(key, JSON.stringify(old.slice(-80)));
+  }catch(e){}
+}
+
+function restoreLocalMessages(){
+  try{
+    const key = 'pick_local_messages_' + (state && state.currentChatId ? state.currentChatId : 'default');
+    return JSON.parse(localStorage.getItem(key) || '[]');
+  }catch(e){
+    return [];
+  }
+}
+
+
+
+
+/* ===== PICK polite single reply + expandable composer ===== */
+window.__pickLastSendText = "";
+window.__pickLastSendAt = 0;
+
+function fixPickName(text){
+  return String(text || '')
+    .replace(/Plcker/gi, 'PICK')
+    .replace(/Picker/g, 'PICK')
+    .replace(/plcker/g, 'PICK');
+}
+
+function politeText(text){
+  let t = fixPickName(text);
+  t = t.replace(/뭘 도와줄까\?/g, '무엇을 도와드릴까요?');
+  t = t.replace(/도와줄게/g, '도와드리겠습니다');
+  return t;
+}
+
+function appendMessageImmediate(role, text){
+  const box = document.getElementById('messageArea');
+  if(!box) return null;
+
+  const row = document.createElement('div');
+  row.className = 'row ' + (role === 'bot' ? 'bot' : role);
+  row.dataset.localId = String(Date.now()) + Math.random();
+
+  const roleName = role === 'user' ? '나' : 'PICK';
+  const avatar = role === 'user' ? '' : '<div class="avatar bot-avatar">P</div>';
+
+  row.innerHTML = `
+    ${avatar}
+    <div class="msg-stack ${role === 'bot' ? 'bot' : role}">
+      <div class="outside-role">${roleName}</div>
+      <div class="bubble ${role === 'bot' ? 'bot' : role}">
+        <div class="bubble-content"></div>
+      </div>
+      <div class="msg-time">${new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'})}${role === 'user' ? ' <span class="check">✓</span>' : ''}</div>
+    </div>
+  `;
+
+  const content = row.querySelector('.bubble-content');
+  content.textContent = politeText(text);
+
+  box.appendChild(row);
+  box.scrollTop = box.scrollHeight;
+  return content;
+}
+
+function typeTextInto(element, text, speed=8){
+  return new Promise(resolve=>{
+    const clean = politeText(text);
+    let i = 0;
+    element.textContent = '';
+
+    function step(){
+      if(i < clean.length){
+        element.textContent += clean.slice(i, i + 2);
+        i += 2;
+        const box = document.getElementById('messageArea');
+        if(box) box.scrollTop = box.scrollHeight;
+        setTimeout(step, speed);
+      }else{
+        resolve();
+      }
+    }
+    step();
+  });
+}
+
+function autoGrowInput(){
+  const input = document.getElementById('messageInput');
+  if(!input) return;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 180) + 'px';
+}
+
+async function sendMessage(){
+  if(isSending) return;
+
+  if(!state.currentChatId){
+    await newChat();
+  }
+
+  const input = document.getElementById('messageInput');
+  const text = input.value.trim();
+  if(!text) return;
+
+  const now = Date.now();
+  if(window.__pickLastSendText === text && now - window.__pickLastSendAt < 1200){
+    return;
+  }
+  window.__pickLastSendText = text;
+  window.__pickLastSendAt = now;
+
+  isSending = true;
+
+  const sendBtn = document.querySelector('.send-btn');
+  const originalText = sendBtn ? sendBtn.textContent : '전송';
+
+  if(sendBtn){
+    sendBtn.disabled = true;
+    sendBtn.textContent = '...';
+  }
+
+  appendMessageImmediate('user', text);
+  input.value = '';
+  autoGrowInput();
+  input.focus();
+
+  const botContent = appendMessageImmediate('bot', '입력하신 내용을 확인하고 있습니다.');
+
+  try{
+    const form = new FormData();
+    form.append('message', text);
+
+    const res = await fetch('/api/chat/' + state.currentChatId + '/send', {
+      method: 'POST',
+      body: form
+    });
+
+    const data = await res.json();
+
+    if(!data || data.ok === false){
+      throw new Error((data && data.error) || '응답 처리 실패');
+    }
+
+    state.chats = data.chats || state.chats;
+    if(typeof renderChatList === 'function') renderChatList();
+
+    const reply = data.reply || (
+      data.messages && data.messages.length
+        ? data.messages[data.messages.length - 1].content
+        : '응답이 없습니다.'
+    );
+
+    await typeTextInto(botContent, reply, 8);
+
+    if(data.ui_action && typeof handleUiAction === 'function'){
+      handleUiAction(data.ui_action);
+    }
+  }catch(e){
+    await typeTextInto(botContent, '죄송합니다. 처리 중 오류가 발생했습니다. 다시 시도해 주세요.', 8);
+  }finally{
+    isSending = false;
+    if(sendBtn){
+      sendBtn.disabled = false;
+      sendBtn.textContent = originalText || '전송';
+    }
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+document.addEventListener('input', (e)=>{
+  if(e.target && e.target.id === 'messageInput') autoGrowInput();
+});
+
+bootstrap();
+</script>
+
+<div class="service-links">
+  <a href="/admin/status">관리자 상태</a>
+  <a href="/logout">로그아웃</a>
+</div>
+
+</body>
+</html>
