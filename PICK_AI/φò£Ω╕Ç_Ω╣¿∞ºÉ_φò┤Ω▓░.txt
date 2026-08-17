@@ -1,0 +1,13 @@
+PICK AI 한글 인코딩 수정본
+
+- PowerShell(.ps1): UTF-8 BOM
+  Windows PowerShell 5.1에서도 한글을 정상 인식하도록 했습니다.
+
+- 배치 파일(.bat): CP949
+  한국어 Windows 명령 프롬프트에서 한글이 깨지지 않도록 했습니다.
+
+- HTML/CSS/JavaScript/Python/Markdown/YAML: UTF-8
+  Synology와 웹 브라우저에서 사용하는 파일은 UTF-8로 통일했습니다.
+
+이 버전에서는 예전에 발생했던 깨진 한글이 다시 나타나지 않도록
+Windows용 스크립트를 새로 작성했습니다.

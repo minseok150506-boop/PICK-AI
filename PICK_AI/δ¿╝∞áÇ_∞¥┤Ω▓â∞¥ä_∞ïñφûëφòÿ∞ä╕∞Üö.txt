@@ -1,0 +1,20 @@
+PICK AI 오류 복구 버전
+
+Windows에서는 다른 .bat 파일보다 먼저:
+
+START_PICK.bat
+
+을 더블클릭하세요.
+
+이 파일이 자동으로:
+1. .venv 생성
+2. requirements.txt 설치/업데이트
+3. 기존 DB 구조 자동 업그레이드
+4. PICK_DOCTOR.py 자가진단
+5. app.py 실행
+
+을 진행합니다.
+
+기존 data 폴더를 유지해도 됩니다. attachments/user_settings의 예전 DB 구조는 자동 마이그레이션합니다.
+
+문제가 남으면 START_PICK.bat 창에서 [FAIL] 또는 Traceback부터 마지막 줄까지 보내주세요.

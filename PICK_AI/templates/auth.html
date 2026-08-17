@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PICK 로그인</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="auth-body">
+  <div class="auth-card">
+    <div class="muted">안녕하세요. PICK에 오신 것을 환영합니다.</div>
+    <h1 class="title">PICK</h1>
+    <div class="muted">로그인 또는 회원가입</div>
+    {% if error %}<div class="warn" style="margin:10px 0">{{ error }}</div>{% endif %}
+    <div class="tabs">
+      <button class="tab active" onclick="showLogin()">로그인</button>
+      <button class="tab" onclick="showRegister()">회원가입</button>
+    </div>
+    <form id="loginForm" method="post" action="/login" class="form active">
+      <label>아이디</label>
+      <input class="input" type="text" name="username" placeholder="아이디 입력">
+      <label>비밀번호</label>
+      <input class="input" type="password" name="password" placeholder="비밀번호 입력">
+      <button class="main-btn" type="submit">로그인</button>
+    </form>
+    <form id="registerForm" method="post" action="/register" class="form">
+      <label>아이디</label>
+      <input class="input" type="text" name="username" placeholder="새 아이디 입력">
+      <label>비밀번호</label>
+      <input class="input" type="password" name="password" placeholder="새 비밀번호 입력">
+      <label>비밀번호 확인</label>
+      <input class="input" type="password" name="password2" placeholder="비밀번호 다시 입력">
+      <button class="main-btn" type="submit">회원가입</button>
+    </form>
+  </div>
+  <script>
+    function showLogin(){document.getElementById('loginForm').classList.add('active');document.getElementById('registerForm').classList.remove('active');}
+    function showRegister(){document.getElementById('registerForm').classList.add('active');document.getElementById('loginForm').classList.remove('active');}
+  </script>
+</body>
+</html>

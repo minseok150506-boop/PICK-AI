@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: pick-ai-test
+    runtime: python
+    region: singapore
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 240 --access-logfile - --error-logfile -
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: SECRET_KEY
+        generateValue: true
+      - key: PICK_DATA_DIR
+        value: /tmp/pick/data
+      - key: PICK_STORAGE_DIR
+        value: /tmp/pick/storage
+      - key: PICK_COOKIE_SECURE
+        value: "1"
+      - key: PICK_ADMIN_USERNAME
+        value: minseok
+      - key: PICK_ADMIN_PASSWORD
+        sync: false
+      - key: PICK_AI_BACKEND_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

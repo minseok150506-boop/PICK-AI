@@ -1,0 +1,10 @@
+{
+  "name": "PICK AI",
+  "short_name": "PICK",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101010",
+  "theme_color": "#101010",
+  "description": "PICK AI - Synology + MiniPC AI service",
+  "icons": []
+}
