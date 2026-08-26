@@ -15,12 +15,17 @@ SECRET_KEY = os.environ.get("SECRET_KEY") or os.environ.get("PICK_SECRET_KEY") o
 ADMIN_USERNAME = os.environ.get("PICK_ADMIN_USERNAME", "minseok")
 ADMIN_PASSWORD = os.environ.get("PICK_ADMIN_PASSWORD", "change-this-password")
 
-OLLAMA_HOST = (
+_OLLAMA_HOST_RAW = (
     os.environ.get("PICK_AI_BACKEND_URL")
     or os.environ.get("PICK_OLLAMA_HOST")
     or os.environ.get("OLLAMA_HOST")
     or "http://127.0.0.1:11434"
-).rstrip("/")
+).strip()
+
+if not _OLLAMA_HOST_RAW.lower().startswith(("http://", "https://")):
+    _OLLAMA_HOST_RAW = "https://" + _OLLAMA_HOST_RAW
+
+OLLAMA_HOST = _OLLAMA_HOST_RAW.rstrip("/")
 
 OLLAMA_MODEL = os.environ.get("PICK_OLLAMA_MODEL") or os.environ.get("OLLAMA_MODEL") or "qwen3:8b"
 OLLAMA_FALLBACK_MODELS = [
