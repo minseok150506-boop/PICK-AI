@@ -53,7 +53,7 @@ from search_query_refiner import refine_search_query
 from orchestrator import orchestrate
 from answer_validator import validate_answer
 from seasonal_modes import list_modes as list_seasonal_modes, resolve_mode
-from accurate_time import refresh_offset, status as accurate_time_status, utc_now, validate_timezone
+from accurate_time import refresh_offset, status as accurate_time_status, utc_now, validate_timezone, now_in_timezone
 from country_resolver import resolve_country
 from google_auth import configure_google, google_enabled, oauth
 from inference_guard import guard, InferenceBusy, CircuitOpen
@@ -199,6 +199,51 @@ def build_system_extensions(user_id, text):
     lang = language_instruction(get_preferred_language(user_id), text)
     code = coding_instruction(text)
     return "\n\n".join(x for x in [lang, code] if x)
+
+def direct_realtime_or_identity_answer(text, payload=None):
+    raw = str(text or "").strip()
+    lowered = raw.lower()
+    payload = payload or {}
+
+    identity_phrases = (
+        "누가 만들", "누가 제작", "누가 개발", "만든 사람", "제작자", "개발자",
+        "어디서 만들", "어느 회사", "네이버에서 만들", "네이버가 만들"
+    )
+    if ("pick" in lowered or "픽" in raw) and any(p in raw for p in identity_phrases):
+        return "PICK은 김민석이 만든 AI 서비스입니다. 네이버에서 만든 서비스가 아닙니다.", "identity"
+
+    if any(word in raw for word in ("날씨", "기온", "온도")):
+        try:
+            result = web_search(raw, mode="always")
+            w = result.get("weather") if isinstance(result, dict) else None
+            if not w:
+                err = result.get("error") if isinstance(result, dict) else None
+                return "날씨 정보를 가져오지 못했습니다." + ((" (" + str(err) + ")") if err else ""), "weather"
+            answer = (
+                f"{w.get('location') or '요청한 지역'}의 현재 기온은 {w.get('temperature_c')}°C이고, "
+                f"체감 온도는 {w.get('apparent_c')}°C입니다.\n"
+                f"오늘 최고/최저 기온은 {w.get('today_high_c')}°C / {w.get('today_low_c')}°C입니다.\n"
+                f"강수확률은 {w.get('precip_probability')}%, 현재 강수량은 {w.get('precipitation_mm')}mm, "
+                f"풍속은 {w.get('wind_kmh')}km/h입니다.\n출처: Open-Meteo"
+            )
+            return answer, "weather"
+        except Exception as exc:
+            return "날씨 정보를 가져오지 못했습니다. (" + str(exc) + ")", "weather"
+
+    time_phrases = (
+        "몇 시", "몇시", "현재 시간", "지금 시간", "시간 알려", "오늘 날짜", "오늘 며칠",
+        "몇 일이야", "몇일이야", "무슨 요일", "오늘 요일", "지금 몇 월", "지금 몇월"
+    )
+    if any(p in raw for p in time_phrases):
+        tz_name = validate_timezone(payload.get("timezone"), "Asia/Seoul")
+        current = now_in_timezone(tz_name)
+        weekdays = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
+        return (
+            f"현재 {tz_name} 기준 {current.year}년 {current.month}월 {current.day}일 "
+            f"{weekdays[current.weekday()]} {current.hour:02d}:{current.minute:02d}:{current.second:02d}입니다.",
+            "time",
+        )
+    return None
 
 def get_user_settings(user_id):
     conn = connect()
@@ -1052,6 +1097,36 @@ def api_chat_stream(chat_id):
     conn.commit()
     conn.close()
     update_chat_title(chat_id)
+
+    direct_answer = direct_realtime_or_identity_answer(text, payload)
+    if direct_answer is not None:
+        direct_text, direct_kind = direct_answer
+
+        @stream_with_context
+        def direct_stream():
+            yield json.dumps({
+                "type": "meta",
+                "route": {"primary": direct_kind},
+                "web_used": direct_kind == "weather",
+                "web_kind": direct_kind if direct_kind == "weather" else None,
+            }, ensure_ascii=False) + "\n"
+            yield json.dumps({
+                "type": "token",
+                "text": direct_text,
+                "model": "PICK-direct",
+            }, ensure_ascii=False) + "\n"
+            yield json.dumps({"type": "done", "model": "PICK-direct"}, ensure_ascii=False) + "\n"
+
+            conn = connect()
+            conn.execute(
+                "INSERT INTO chat_messages(chat_id,role,content,created_at) VALUES(?,?,?,?)",
+                (chat_id, "assistant", direct_text, now())
+            )
+            conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
+            conn.commit()
+            conn.close()
+
+        return Response(direct_stream(), mimetype="application/x-ndjson")
 
     # Conservative automatic memory extraction.
     try:

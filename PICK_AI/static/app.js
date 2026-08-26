@@ -316,7 +316,7 @@ async function sendTextStreaming(text) {
         "Content-Type": "application/json",
         "X-CSRF-Token": csrfToken()
       },
-      body: JSON.stringify({message: clean})
+      body: JSON.stringify({message: clean, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Seoul"})
     });
 
     if (response.status === 401) {

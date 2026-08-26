@@ -34,6 +34,10 @@ def plan_route(analysis, context_resolution=None) -> RoutePlan:
     if intent in {"debug_code", "write_code", "coding"}:
         primary = "coding"
         reason = "코딩 요청으로 분류됨"
+    elif intent == "time":
+        primary = "time"
+        needs_web = False
+        reason = "정확한 현재 시간 정보 필요"
     elif intent == "weather":
         primary = "weather"
         needs_web = True

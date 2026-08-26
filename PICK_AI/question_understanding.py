@@ -116,6 +116,8 @@ def classify_intent(text: str) -> str:
             return "write_code"
         return "coding"
 
+    if any(x in t for x in ["몇 시", "몇시", "현재 시간", "지금 시간", "시간 알려", "오늘 날짜", "무슨 요일"]):
+        return "time"
     if any(x in t for x in ["날씨", "기온", "온도"]):
         return "weather"
     if "뉴스" in t:
