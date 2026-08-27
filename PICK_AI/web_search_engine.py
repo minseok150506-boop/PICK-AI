@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PICK-AI/1.0"
-TIMEOUT = 12
+TIMEOUT = 7
 
 
 def _get(url: str, timeout: int = TIMEOUT) -> bytes:
@@ -121,7 +121,7 @@ def _news_recency_suffix(text: str) -> str:
     if any(k in t for k in ("최근", "이번주", "이번 주")):
         return " when:7d"
     return ""
-def search_news(query: str, limit: int = 8) -> list[dict[str, str]]:
+def search_news(query: str, limit: int = 10) -> list[dict[str, str]]:
     clean_query = _extract_news_query(query)
     q = urllib.parse.quote_plus(clean_query + _news_recency_suffix(query))
     raw = _get(
@@ -199,6 +199,38 @@ def weather(location: str) -> dict[str, Any]:
     }
 
 
+
+def weather_coords(latitude: float, longitude: float) -> dict[str, Any]:
+    lat = float(latitude)
+    lon = float(longitude)
+    data = _json(
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat:.6f}&longitude={lon:.6f}"
+        "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m"
+        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+        "&timezone=auto&forecast_days=2",
+        timeout=6,
+    )
+    cur = data.get("current") or {}
+    daily = data.get("daily") or {}
+    return {
+        "location": "현재 위치",
+        "latitude": lat,
+        "longitude": lon,
+        "temperature_c": cur.get("temperature_2m"),
+        "apparent_c": cur.get("apparent_temperature"),
+        "precipitation_mm": cur.get("precipitation"),
+        "rain_mm": cur.get("rain"),
+        "weather_code": cur.get("weather_code"),
+        "wind_kmh": cur.get("wind_speed_10m"),
+        "today_high_c": (daily.get("temperature_2m_max") or [None])[0],
+        "today_low_c": (daily.get("temperature_2m_min") or [None])[0],
+        "precip_probability": (daily.get("precipitation_probability_max") or [None])[0],
+        "provider": "Open-Meteo",
+        "source_url": "https://open-meteo.com/",
+    }
+
+
 def _extract_weather_location(text: str) -> str:
     value = str(text or "").strip()
     value = re.sub(r"(오늘|내일|현재|지금|실시간)", " ", value)
@@ -262,7 +294,7 @@ def search(query: str, mode: str = "auto") -> dict[str, Any]:
 
         if "뉴스" in lowered:
             result["kind"] = "news"
-            result["results"] = search_news(text, 8)
+            result["results"] = search_news(text, 10)
             return result
 
         if "유튜브" in lowered or "youtube" in lowered:

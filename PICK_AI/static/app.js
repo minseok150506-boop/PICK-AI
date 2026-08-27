@@ -6,6 +6,7 @@ const state = {
   currentChatId: null,
   messages: [],
   sending: false,
+  abortController: null,
   settings: {
     selected_model: "auto",
     web_mode: "auto",
@@ -97,8 +98,20 @@ function autoGrow(el) {
 function updateSendButtons() {
   const h = $("homeSendBtn");
   const s = $("sendBtn");
-  if (h) h.disabled = state.sending || !$("homeInput")?.value.trim();
-  if (s) s.disabled = state.sending || !$("messageInput")?.value.trim();
+
+  if (h) {
+    h.disabled = state.sending ? false : !$("homeInput")?.value.trim();
+    h.textContent = state.sending ? "■" : "↑";
+    h.setAttribute("aria-label", state.sending ? "답변 중지" : "전송");
+    h.title = state.sending ? "답변 중지" : "전송";
+  }
+
+  if (s) {
+    s.disabled = state.sending ? false : !$("messageInput")?.value.trim();
+    s.textContent = state.sending ? "■" : "↑";
+    s.setAttribute("aria-label", state.sending ? "답변 중지" : "전송");
+    s.title = state.sending ? "답변 중지" : "전송";
+  }
 }
 
 function applyCompactMode() {
@@ -217,7 +230,11 @@ function renderMessages(scroll = true) {
             <button type="button" data-speak-message="${index}">듣기</button>
             <button type="button" data-rate-message="${index}" data-rating="1">👍</button>
             <button type="button" data-rate-message="${index}" data-rating="-1">👎</button>
-          </div>` : ""}
+          </div>
+          ${Array.isArray(m.__followUps) && m.__followUps.length ? `
+            <div class="follow-up-questions">
+              ${m.__followUps.map(q => `<button type="button" data-follow-up="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join("")}
+            </div>` : ""}` : ""}
         </div>
       </article>`;
   }).join("");
@@ -290,6 +307,58 @@ function closeChatMenu() {
   $("chatMenuBackdrop")?.remove();
 }
 
+
+function stopCurrentResponse() {
+  if (!state.sending) return;
+  if (state.abortController) {
+    state.abortController.abort();
+  }
+  showToast("답변 생성을 중지했습니다.");
+}
+
+function weatherQuery(text) {
+  const t = String(text || "").toLowerCase();
+  return ["날씨", "기온", "온도"].some(k => t.includes(k));
+}
+
+function getGpsForWeather(text) {
+  return new Promise(resolve => {
+    if (!weatherQuery(text) || !navigator.geolocation || !window.isSecureContext) {
+      resolve({});
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({
+        latitude: Number(pos.coords.latitude.toFixed(6)),
+        longitude: Number(pos.coords.longitude.toFixed(6)),
+        location_accuracy_m: Math.round(pos.coords.accuracy || 0)
+      }),
+      () => resolve({}),
+      {
+        enableHighAccuracy: false,
+        timeout: 2500,
+        maximumAge: 5 * 60 * 1000
+      }
+    );
+  });
+}
+
+function buildFollowUps(query) {
+  const q = String(query || "").toLowerCase();
+  if (["날씨", "기온", "온도"].some(k => q.includes(k))) {
+    return ["내일 날씨도 알려줘", "비 올 가능성을 더 자세히 알려줘", "이번 주 날씨도 알려줘"];
+  }
+  if (q.includes("뉴스") || q.includes("소식")) {
+    return ["가장 중요한 뉴스 3개만 자세히 설명해줘", "이 뉴스들이 왜 중요한지 알려줘", "관련 최신 뉴스도 더 찾아줘"];
+  }
+  if (["코드", "코딩", "python", "javascript", "오류", "에러", "버그"].some(k => q.includes(k))) {
+    return ["전체 코드로 다시 보여줘", "오류 가능성도 확인해줘", "실행 방법까지 알려줘"];
+  }
+  return ["더 자세히 설명해줘", "핵심만 정리해줘", "예시를 보여줘"];
+}
+
+
 async function sendTextStreaming(text) {
   const clean = String(text || "").trim();
   if (!clean || state.sending) return;
@@ -358,14 +427,22 @@ async function sendTextStreaming(text) {
   }
 
   try {
+    state.abortController = new AbortController();
+    const gps = await getGpsForWeather(clean);
+
     const response = await fetch(`/api/chat/${state.currentChatId}/stream`, {
       method: "POST",
       credentials: "same-origin",
+      signal: state.abortController.signal,
       headers: {
         "Content-Type": "application/json",
         "X-CSRF-Token": csrfToken()
       },
-      body: JSON.stringify({message: clean, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Seoul"})
+      body: JSON.stringify({
+        message: clean,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Seoul",
+        ...gps
+      })
     });
 
     if (response.status === 401) {
@@ -423,18 +500,36 @@ async function sendTextStreaming(text) {
       }
     }
 
-    const refreshed = await api(`/api/chat/${state.currentChatId}`);
-    state.messages = refreshed.messages || state.messages;
+    // Keep the exact streamed answer on screen. Do not overwrite it with
+    // an older DB snapshot immediately after stream completion.
+    const currentAssistant = state.messages[assistantIndex];
+    if (currentAssistant && currentAssistant.content && !currentAssistant.__pickActivity) {
+      currentAssistant.__followUps = buildFollowUps(clean);
+    }
+
     const boot = await api("/api/bootstrap");
     state.chats = boot.chats || state.chats;
     renderChatList();
     renderMessages();
   } catch (e) {
-    state.messages[assistantIndex].content ||= `오류: ${e.message}`;
-    renderMessages();
-    showToast(e.message);
+    if (e?.name === "AbortError") {
+      stopActivity();
+      const msg = state.messages[assistantIndex];
+      if (msg && msg.__pickActivity) {
+        msg.content = "답변 생성을 중지했습니다.";
+        delete msg.__pickActivity;
+      } else if (msg && msg.content) {
+        msg.content += "\n\n[답변 생성이 중지되었습니다.]";
+      }
+      renderMessages();
+    } else {
+      state.messages[assistantIndex].content ||= `오류: ${e.message}`;
+      renderMessages();
+      showToast(e.message);
+    }
   } finally {
     stopActivity();
+    state.abortController = null;
     state.sending = false;
     updateSendButtons();
     $("messageInput")?.focus();
@@ -1162,6 +1257,14 @@ document.addEventListener("click", async event => {
     pinMemoryBtn.dataset.pinned
   );
 
+  const followUpBtn = event.target.closest("[data-follow-up]");
+  if (followUpBtn) {
+    const followText = followUpBtn.dataset.followUp || "";
+    if (!followText) return;
+    setScreen("chatScreen");
+    return sendTextStreaming(followText);
+  }
+
   const promptBtn = event.target.closest("[data-prompt]");
   if (promptBtn) {
     const promptText = promptBtn.dataset.prompt || "";
@@ -1192,8 +1295,8 @@ document.addEventListener("click", async event => {
 // Direct listeners: bind only if the element exists.
 $("newChatBtn")?.addEventListener("click", startNewChatView);
 $("topNewChatBtn")?.addEventListener("click", startNewChatView);
-$("homeSendBtn")?.addEventListener("click", sendFromHome);
-$("sendBtn")?.addEventListener("click", () => sendTextStreaming($("messageInput")?.value || ""));
+$("homeSendBtn")?.addEventListener("click", () => state.sending ? stopCurrentResponse() : sendFromHome());
+$("sendBtn")?.addEventListener("click", () => state.sending ? stopCurrentResponse() : sendTextStreaming($("messageInput")?.value || ""));
 $("memoryCenterBtn")?.addEventListener("click", openMemoryCenter);
 $("learningBtn")?.addEventListener("click", openLearningCenter);
 $("settingsBtn")?.addEventListener("click", openSettings);

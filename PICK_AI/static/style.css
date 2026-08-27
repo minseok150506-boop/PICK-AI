@@ -635,3 +635,23 @@ button, a, input, textarea, select {
 .account-isolation-info{display:flex;justify-content:space-between;gap:10px;margin-top:12px;padding:10px 11px;border-radius:10px;background:#171717;border:1px solid #343434}
 .account-isolation-info strong{font-size:11px;color:#cfc4f3}.account-isolation-info span{font-size:10px;color:#888}
 @media(max-width:650px){.profile-memory-grid{grid-template-columns:1fr}.profile-memory-grid textarea{grid-column:auto}.account-isolation-info{flex-direction:column}}
+
+
+.follow-up-questions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.follow-up-questions button {
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 999px;
+  background: rgba(255,255,255,.05);
+  color: inherit;
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.follow-up-questions button:hover {
+  background: rgba(255,255,255,.10);
+}

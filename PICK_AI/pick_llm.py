@@ -80,9 +80,9 @@ class PickOllamaLLM:
     def _prompt(self, text, state=None, history=None, web_context=''):
         state = state or {}
         history = history or []
-        recent = history[-6:]
+        recent = history[-8:]
         history_text = "\n".join(
-            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {str(h.get('content',''))[-1800:]}"
+            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {str(h.get('content',''))[-1200:]}"
             for h in recent
         )
         summary = state.get("summary", "현재 진행 중인 작업 없음")
@@ -99,6 +99,9 @@ class PickOllamaLLM:
 - 사용자가 최신 정보가 필요한 질문을 했는데 검색 자료가 없다면 최신 정보라고 단정하지 않습니다.
 - 코드 요청에는 실행 가능한 코드와 필요한 파일 위치를 명확하게 설명합니다.
 - 사용자가 알려준 고유명사는 마음대로 다른 단어로 바꾸지 않습니다.
+- '그거', '그 방법', '이전 것', '계속', '다음', '그 코드' 같은 후속 표현은 최근 대화와 대화 요약을 먼저 참조해 정확한 대상을 이어서 이해합니다.
+- 이미 같은 대화에서 확정된 정보는 사용자에게 반복해서 다시 묻지 않습니다.
+- 답변 첫 문장은 가능한 빨리 핵심부터 시작하고 불필요한 서론을 줄입니다.
 - 답변은 실용적이고 자연스럽게 작성합니다.
 
 현재 작업 상태:
@@ -211,7 +214,7 @@ def stream_generate(prompt, model=None, timeout=300):
                 "temperature": 0.18 if coding_mode else 0.35,
                 "top_p": 0.9,
                 "num_ctx": 4096,
-                "num_predict": 1100 if coding_mode else 700,
+                "num_predict": 900 if coding_mode else 520,
             },
         }
         req = urllib.request.Request(

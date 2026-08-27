@@ -25,7 +25,7 @@ from database import connect, init_db, log, now
 from pick_llm import PickLLMRouter, ollama_health, stream_generate, build_prompt
 from security import client_key, csrf_token, limiter, validate_csrf
 from web_tools import build_web_context, format_context
-from web_search_engine import search as web_search, format_for_llm as format_web_search
+from web_search_engine import search as web_search, format_for_llm as format_web_search, weather_coords
 from memory_store import add_memory, delete_memory, format_memory_context, list_memories
 from memory_engine import (
     add_memory as add_memory_v2,
@@ -133,7 +133,7 @@ def pick_security_headers(response):
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault(
         "Permissions-Policy",
-        "camera=(), geolocation=(), payment=(), usb=()"
+        "camera=(), geolocation=(self), payment=(), usb=()"
     )
     response.headers.setdefault(
         "Content-Security-Policy",
@@ -214,17 +214,27 @@ def direct_realtime_or_identity_answer(text, payload=None):
 
     if any(word in raw for word in ("날씨", "기온", "온도")):
         try:
-            result = web_search(raw, mode="always")
-            w = result.get("weather") if isinstance(result, dict) else None
-            if not w:
-                err = result.get("error") if isinstance(result, dict) else None
-                return "날씨 정보를 가져오지 못했습니다." + ((" (" + str(err) + ")") if err else ""), "weather"
+            latitude = payload.get("latitude")
+            longitude = payload.get("longitude")
+
+            if latitude is not None and longitude is not None:
+                w = weather_coords(latitude, longitude)
+                location_note = "브라우저 GPS 현재 위치"
+            else:
+                result = web_search(raw, mode="always")
+                w = result.get("weather") if isinstance(result, dict) else None
+                if not w:
+                    err = result.get("error") if isinstance(result, dict) else None
+                    return "날씨 정보를 가져오지 못했습니다." + ((" (" + str(err) + ")") if err else ""), "weather"
+                location_note = w.get("location") or "요청한 지역"
+
             answer = (
-                f"{w.get('location') or '요청한 지역'}의 현재 기온은 {w.get('temperature_c')}°C이고, "
-                f"체감 온도는 {w.get('apparent_c')}°C입니다.\n"
-                f"오늘 최고/최저 기온은 {w.get('today_high_c')}°C / {w.get('today_low_c')}°C입니다.\n"
-                f"강수확률은 {w.get('precip_probability')}%, 현재 강수량은 {w.get('precipitation_mm')}mm, "
-                f"풍속은 {w.get('wind_kmh')}km/h입니다.\n출처: Open-Meteo"
+                f"{location_note} 기준 날씨입니다.\n"
+                f"현재 {w.get('temperature_c')}°C, 체감 {w.get('apparent_c')}°C입니다.\n"
+                f"오늘 최고/최저 {w.get('today_high_c')}°C / {w.get('today_low_c')}°C이고, "
+                f"강수확률은 {w.get('precip_probability')}%입니다.\n"
+                f"현재 강수량 {w.get('precipitation_mm')}mm, 풍속 {w.get('wind_kmh')}km/h입니다.\n"
+                "출처: Open-Meteo"
             )
             return answer, "weather"
         except Exception as exc:
@@ -239,16 +249,25 @@ def direct_realtime_or_identity_answer(text, payload=None):
             if not rows:
                 return "최신 뉴스 검색 결과를 가져오지 못했습니다.", "news"
 
-            lines = ["확인된 최신 뉴스입니다."]
-            for i, row in enumerate(rows[:6], 1):
+            lines = [
+                "최신 뉴스 검색 결과를 중요도 판단 없이 최신순으로 정리했습니다.",
+                ""
+            ]
+            for i, row in enumerate(rows[:8], 1):
                 title = str(row.get("title") or "").strip()
                 provider = str(row.get("provider") or "Google News").strip()
                 published = str(row.get("published_at") or row.get("snippet") or "").strip()
                 lines.append(f"{i}. {title}")
-                lines.append(f"   출처: {provider}" + (f" · {published}" if published else ""))
+                lines.append(f"   언론사: {provider}")
+                if published:
+                    lines.append(f"   게시: {published}")
                 if row.get("url"):
-                    lines.append(f"   {row.get('url')}")
-            lines.append("Google News RSS에서 확인된 제목·언론사·게시시각만 표시했습니다.")
+                    lines.append(f"   링크: {row.get('url')}")
+                lines.append("")
+            lines.append(
+                "위 목록은 Google News RSS에서 확인한 기사 제목·언론사·게시시각을 기준으로 했습니다. "
+                "원하시면 특정 기사들을 골라 배경·영향·쟁점까지 이어서 설명해 드릴 수 있습니다."
+            )
             return "\n".join(lines), "news"
         except Exception as exc:
             return "최신 뉴스 정보를 가져오지 못했습니다. (" + str(exc) + ")", "news"
@@ -1127,19 +1146,6 @@ def api_chat_stream(chat_id):
 
         @stream_with_context
         def direct_stream():
-            yield json.dumps({
-                "type": "meta",
-                "route": {"primary": direct_kind},
-                "web_used": direct_kind == "weather",
-                "web_kind": direct_kind if direct_kind == "weather" else None,
-            }, ensure_ascii=False) + "\n"
-            yield json.dumps({
-                "type": "token",
-                "text": direct_text,
-                "model": "PICK-direct",
-            }, ensure_ascii=False) + "\n"
-            yield json.dumps({"type": "done", "model": "PICK-direct"}, ensure_ascii=False) + "\n"
-
             conn = connect()
             conn.execute(
                 "INSERT INTO chat_messages(chat_id,role,content,created_at) VALUES(?,?,?,?)",
@@ -1148,6 +1154,23 @@ def api_chat_stream(chat_id):
             conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
             conn.commit()
             conn.close()
+
+            yield json.dumps({
+                "type": "meta",
+                "route": {"primary": direct_kind},
+                "web_used": direct_kind in {"weather", "news"},
+                "web_kind": direct_kind if direct_kind in {"weather", "news"} else None,
+            }, ensure_ascii=False) + "\n"
+            yield json.dumps({
+                "type": "token",
+                "text": direct_text,
+                "model": "PICK-direct",
+            }, ensure_ascii=False) + "\n"
+            yield json.dumps({
+                "type": "done",
+                "model": "PICK-direct",
+                "persisted": True,
+            }, ensure_ascii=False) + "\n"
 
         return Response(direct_stream(), mimetype="application/x-ndjson")
 
