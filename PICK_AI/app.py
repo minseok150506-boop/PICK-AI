@@ -230,6 +230,29 @@ def direct_realtime_or_identity_answer(text, payload=None):
         except Exception as exc:
             return "날씨 정보를 가져오지 못했습니다. (" + str(exc) + ")", "weather"
 
+    if "뉴스" in raw and not any(
+        word in raw for word in ("왜", "원인", "영향", "전망", "분석", "비교", "의미")
+    ):
+        try:
+            result = web_search(raw, mode="always")
+            rows = (result.get("results") or []) if isinstance(result, dict) else []
+            if not rows:
+                return "최신 뉴스 검색 결과를 가져오지 못했습니다.", "news"
+
+            lines = ["확인된 최신 뉴스입니다."]
+            for i, row in enumerate(rows[:6], 1):
+                title = str(row.get("title") or "").strip()
+                provider = str(row.get("provider") or "Google News").strip()
+                published = str(row.get("published_at") or row.get("snippet") or "").strip()
+                lines.append(f"{i}. {title}")
+                lines.append(f"   출처: {provider}" + (f" · {published}" if published else ""))
+                if row.get("url"):
+                    lines.append(f"   {row.get('url')}")
+            lines.append("Google News RSS에서 확인된 제목·언론사·게시시각만 표시했습니다.")
+            return "\n".join(lines), "news"
+        except Exception as exc:
+            return "최신 뉴스 정보를 가져오지 못했습니다. (" + str(exc) + ")", "news"
+
     time_phrases = (
         "몇 시", "몇시", "현재 시간", "지금 시간", "시간 알려", "오늘 날짜", "오늘 며칠",
         "몇 일이야", "몇일이야", "무슨 요일", "오늘 요일", "지금 몇 월", "지금 몇월"
@@ -1135,7 +1158,7 @@ def api_chat_stream(chat_id):
         log("WARNING", f"memory auto-store: {exc}")
 
     history = get_messages(chat_id)
-    recent = [{"role": m["role"], "content": m["content"]} for m in history[:-1][-12:]]
+    recent = [{"role": m["role"], "content": m["content"]} for m in history[:-1][-6:]]
 
     orchestration = orchestrate(text, recent)
     question_analysis = analyze_question(text, recent)
@@ -1211,6 +1234,9 @@ def api_chat_stream(chat_id):
             combined_context
         ] if x
     )
+    if len(extended_context) > 10000:
+        extended_context = extended_context[-10000:]
+
     prompt = build_prompt(
         normalized_text,
         state={"summary": f"현재 채팅 ID {chat_id}"},
@@ -1363,7 +1389,7 @@ def api_chat_send(chat_id):
     history = get_messages(chat_id)
     history_for_llm = [
         {"role": m["role"], "content": m["content"]}
-        for m in history[:-1][-12:]
+        for m in history[:-1][-6:]
     ]
     orchestration = orchestrate(text, history_for_llm)
     question_analysis = analyze_question(text, history_for_llm)

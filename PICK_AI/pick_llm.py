@@ -1,6 +1,7 @@
 import base64
 import json
 import socket
+import time
 import urllib.error
 import urllib.request
 
@@ -37,9 +38,17 @@ def _json_request(path, payload=None, timeout=120):
         raise OllamaError(f"Ollama 연결 실패: {exc}") from exc
 
 
-def ollama_health():
-    data = _json_request("/api/tags", timeout=8)
-    return [m.get("name") for m in data.get("models", []) if m.get("name")]
+_HEALTH_CACHE = {"at": 0.0, "models": []}
+
+def ollama_health(force=False):
+    now = time.monotonic()
+    if not force and _HEALTH_CACHE["models"] and (now - _HEALTH_CACHE["at"]) < 30:
+        return list(_HEALTH_CACHE["models"])
+    data = _json_request("/api/tags", timeout=6)
+    models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+    _HEALTH_CACHE["at"] = now
+    _HEALTH_CACHE["models"] = list(models)
+    return models
 
 
 def _model_candidates(preferred=None):
@@ -71,9 +80,9 @@ class PickOllamaLLM:
     def _prompt(self, text, state=None, history=None, web_context=''):
         state = state or {}
         history = history or []
-        recent = history[-12:]
+        recent = history[-6:]
         history_text = "\n".join(
-            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {h.get('content','')}"
+            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {str(h.get('content',''))[-1800:]}"
             for h in recent
         )
         summary = state.get("summary", "현재 진행 중인 작업 없음")
@@ -129,10 +138,13 @@ PICK:"""
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
+                    "keep_alive": "30m",
+                    "think": False,
                     "options": {
                         "temperature": 0.45,
                         "top_p": 0.9,
-                        "num_predict": 1400,
+                        "num_ctx": 4096,
+                        "num_predict": 700,
                     }
                 }, timeout=self.timeout)
                 answer = str(data.get("response") or "").strip()
@@ -181,26 +193,25 @@ def vision_analyze(image_paths, prompt):
 
 
 def stream_generate(prompt, model=None, timeout=300):
-    """Yield Ollama response chunks. Falls back to a complete error message."""
     candidates = _model_candidates(model or OLLAMA_MODEL)
     last_error = None
+    coding_mode = "[Coding mode]" in prompt
 
-    try:
-        available = set(ollama_health())
-    except Exception:
-        available = None
+    if not prompt.lstrip().startswith("/no_think"):
+        prompt = "/no_think\n" + prompt
 
     for selected in candidates:
-        if available is not None and selected not in available:
-            continue
         payload = {
             "model": selected,
             "prompt": prompt,
             "stream": True,
+            "keep_alive": "30m",
+            "think": False,
             "options": {
-                "temperature": 0.45,
+                "temperature": 0.18 if coding_mode else 0.35,
                 "top_p": 0.9,
-                "num_predict": 1600,
+                "num_ctx": 4096,
+                "num_predict": 1100 if coding_mode else 700,
             },
         }
         req = urllib.request.Request(
@@ -232,7 +243,6 @@ def stream_generate(prompt, model=None, timeout=300):
             f"AI 백엔드 연결 상태를 확인해 주세요. ({last_error})"
         ),
     }
-
 
 def build_prompt(text, state=None, history=None, web_context=""):
     return PickOllamaLLM()._prompt(text, state, history, web_context)

@@ -101,22 +101,50 @@ def search_wikipedia(query: str, limit: int = 3) -> list[dict[str, str]]:
     return out
 
 
-def search_news(query: str, limit: int = 6) -> list[dict[str, str]]:
-    q = urllib.parse.quote_plus(query)
+def _extract_news_query(text: str) -> str:
+    value = str(text or "").strip()
+    value = re.sub(
+        r"(오늘|현재|지금|최신|최근|실시간|뉴스|소식|기사|"
+        r"알려\s*주세요|알려주세요|알려\s*줘|알려줘|"
+        r"찾아\s*주세요|찾아주세요|찾아\s*줘|찾아줘|검색)",
+        " ",
+        value,
+    )
+    value = re.sub(r"\s+", " ", value).strip(" ?!.")
+    return value or "대한민국"
+
+
+def _news_recency_suffix(text: str) -> str:
+    t = str(text or "").lower()
+    if any(k in t for k in ("오늘", "지금", "현재", "실시간", "최신")):
+        return " when:1d"
+    if any(k in t for k in ("최근", "이번주", "이번 주")):
+        return " when:7d"
+    return ""
+def search_news(query: str, limit: int = 8) -> list[dict[str, str]]:
+    clean_query = _extract_news_query(query)
+    q = urllib.parse.quote_plus(clean_query + _news_recency_suffix(query))
     raw = _get(
         f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
     )
     root = ET.fromstring(raw)
     out = []
     for item in root.findall("./channel/item")[:limit]:
+        title = (item.findtext("title") or "").strip()
+        source = (item.findtext("source") or "").strip()
+        published = (item.findtext("pubDate") or "").strip()
+        if not source and " - " in title:
+            maybe_title, maybe_source = title.rsplit(" - ", 1)
+            if len(maybe_source) <= 80:
+                title, source = maybe_title.strip(), maybe_source.strip()
         out.append({
-            "title": (item.findtext("title") or "").strip(),
+            "title": title,
             "url": (item.findtext("link") or "").strip(),
-            "snippet": (item.findtext("pubDate") or "").strip(),
-            "provider": "Google News RSS",
+            "snippet": published,
+            "published_at": published,
+            "provider": source or "Google News",
         })
     return out
-
 
 def search_youtube(query: str, limit: int = 5) -> list[dict[str, str]]:
     rows = search_duckduckgo(f"site:youtube.com/watch {query}", limit + 5)
@@ -172,12 +200,25 @@ def weather(location: str) -> dict[str, Any]:
 
 
 def _extract_weather_location(text: str) -> str:
-    cleaned = re.sub(
-        r"(오늘|내일|현재|지금|날씨|기온|온도|알려줘|알려 줘|어때|검색|찾아줘|찾아 줘)",
-        " ", text or ""
+    value = str(text or "").strip()
+    value = re.sub(r"(오늘|내일|현재|지금|실시간)", " ", value)
+    value = re.sub(r"(날씨|기온|온도)(?:를|을|은|는|이|가)?", " ", value)
+    value = re.sub(
+        r"(알려\s*주세요|알려주세요|알려\s*줘|알려줘|"
+        r"찾아\s*주세요|찾아주세요|찾아\s*줘|찾아줘|"
+        r"검색해\s*주세요|검색해주세요|검색|어떤가요|어때요|어때)",
+        " ",
+        value,
     )
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ?!.")
-    return cleaned or "서울"
+    value = re.sub(r"[?!.~,]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+
+    tokens = []
+    for token in value.split():
+        cleaned = re.sub(r"(에서|에는|으로|로|의|은|는|이|가|을|를|에)$", "", token).strip()
+        if cleaned:
+            tokens.append(cleaned)
+    return " ".join(tokens).strip() or "서울"
 
 
 def dedupe(rows: list[dict[str, str]], limit: int = 8) -> list[dict[str, str]]:
@@ -221,7 +262,7 @@ def search(query: str, mode: str = "auto") -> dict[str, Any]:
 
         if "뉴스" in lowered:
             result["kind"] = "news"
-            result["results"] = search_news(text, 6)
+            result["results"] = search_news(text, 8)
             return result
 
         if "유튜브" in lowered or "youtube" in lowered:
@@ -265,6 +306,24 @@ def format_for_llm(result: dict[str, Any]) -> str:
             f"출처: {w.get('source_url')}\n"
             f"조회시각: {result.get('retrieved_at')}"
         )
+
+    if result.get("kind") == "news":
+        rows = result.get("results") or []
+        if not rows:
+            return "[뉴스 검색 결과를 가져오지 못했습니다. 최신 뉴스를 확인했다고 단정하지 마세요.]"
+        lines = [
+            "[최신 뉴스 자료]",
+            "아래 기사 제목, 언론사, 게시시각만 근거로 답하세요. 확인되지 않은 내용을 추가하지 마세요.",
+        ]
+        for i, row in enumerate(rows, 1):
+            lines.extend([
+                f"{i}. {row.get('title','')}",
+                f"언론사: {row.get('provider','Google News')}",
+                f"게시시각: {row.get('published_at') or row.get('snippet','')}",
+                f"URL: {row.get('url','')}",
+            ])
+        lines.append(f"조회시각: {result.get('retrieved_at')}")
+        return "\n".join(lines)
 
     rows = result.get("results") or []
     if not rows:

@@ -299,8 +299,57 @@ async function sendTextStreaming(text) {
   updateSendButtons();
 
   state.messages.push({role: "user", content: clean});
-  state.messages.push({role: "assistant", content: ""});
+
+  const lowerQuery = clean.toLowerCase();
+  const codingQuery = [
+    "코드", "코딩", "에러", "오류", "버그", "python", "javascript",
+    "java", "c++", "html", "css", "flask", "api", "cmd", "powershell"
+  ].some(k => lowerQuery.includes(k));
+  const newsQuery = lowerQuery.includes("뉴스") || lowerQuery.includes("소식");
+
+  const activityPlan = newsQuery
+    ? [
+        "● 최신 뉴스 요청을 확인하고 있습니다…",
+        "● 뉴스 출처와 게시 시각을 확인하고 있습니다…",
+        "● 확인한 자료로 답변을 준비하고 있습니다…"
+      ]
+    : codingQuery
+      ? [
+          "● 코드 요청을 이해하고 있습니다…",
+          "● 코드 구조와 오류 가능성을 분석하고 있습니다…",
+          "● 실행 가능한 답변을 생성하고 있습니다…"
+        ]
+      : [
+          "● 질문을 이해하고 있습니다…",
+          "● 필요한 정보를 준비하고 있습니다…",
+          "● PICK이 답변을 생성하고 있습니다…"
+        ];
+
+  state.messages.push({
+    role: "assistant",
+    content: activityPlan[0],
+    __pickActivity: true
+  });
   const assistantIndex = state.messages.length - 1;
+  let receivedFirstToken = false;
+  const activityTimers = [];
+
+  const setActivity = text => {
+    const message = state.messages[assistantIndex];
+    if (!message || receivedFirstToken || !message.__pickActivity) return;
+    message.content = text;
+    renderMessages(false);
+  };
+
+  activityTimers.push(setTimeout(() => setActivity(activityPlan[1]), 1800));
+  activityTimers.push(setTimeout(() => setActivity(activityPlan[2]), 4200));
+
+  const stopActivity = () => {
+    activityTimers.forEach(clearTimeout);
+    const message = state.messages[assistantIndex];
+    if (message) delete message.__pickActivity;
+  };
+
   renderMessages();
 
   if ($("messageInput")) {
@@ -342,9 +391,15 @@ async function sendTextStreaming(text) {
         if (!line.trim()) continue;
         const item = JSON.parse(line);
         if (item.type === "token") {
+          if (!receivedFirstToken) {
+            receivedFirstToken = true;
+            stopActivity();
+            state.messages[assistantIndex].content = "";
+          }
           state.messages[assistantIndex].content += item.text || "";
           renderMessages(false);
         } else if (item.type === "error") {
+          stopActivity();
           state.messages[assistantIndex].content += item.text || "오류가 발생했습니다.";
           renderMessages(false);
         } else if (item.type === "meta") {
@@ -352,6 +407,18 @@ async function sendTextStreaming(text) {
           if (item.web_used) showToast("인터넷 자료를 확인했습니다.");
           if (item.route?.primary === "coding") showToast("코딩 모드로 처리합니다.");
           if (item.clarification) showToast("정확한 답변을 위해 확인이 필요합니다.");
+
+          if (!receivedFirstToken) {
+            if (item.route?.primary === "news" || item.web_kind === "news") {
+              setActivity("● 최신 뉴스 자료를 확인했습니다. 답변을 작성하고 있습니다…");
+            } else if (item.route?.primary === "coding") {
+              setActivity("● 코드 분석을 마쳤습니다. 답변 코드를 작성하고 있습니다…");
+            } else if (item.web_used) {
+              setActivity("● 인터넷 자료를 확인했습니다. 답변을 작성하고 있습니다…");
+            } else {
+              setActivity("● PICK이 답변을 생성하고 있습니다…");
+            }
+          }
         }
       }
     }
@@ -367,6 +434,7 @@ async function sendTextStreaming(text) {
     renderMessages();
     showToast(e.message);
   } finally {
+    stopActivity();
     state.sending = false;
     updateSendButtons();
     $("messageInput")?.focus();
