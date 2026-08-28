@@ -28,11 +28,18 @@ COMMON_KO_FIXES = {
     "파워셸": "PowerShell",
     "파워쉘": "PowerShell",
     "시놀로지": "Synology",
+    "내일날씨": "내일 날씨",
+    "오늘날씨": "오늘 날씨",
+    "모레날씨": "모레 날씨",
+    "날씨알려줘": "날씨 알려줘",
+    "계속해줘": "계속 해줘",
 }
 
 REFERENCE_WORDS = [
     "이거", "그거", "저거", "이것", "그것", "저것",
     "아까", "전에", "위에", "그 파일", "그 코드", "그 버튼",
+    "그 사이트", "그 주소", "그 설정", "그 명령어", "그 모델",
+    "계속", "다음", "그대로", "이대로", "이것도", "그것도", "아까 거", "아까거",
 ]
 
 ERROR_HINTS = [
@@ -177,9 +184,16 @@ def analyze_question(text: str, history: list[dict] | None = None) -> QuestionAn
                 ambiguity = max(0, ambiguity - 2)
                 reasons.append("최근 대화 문맥으로 일부 보완 가능합니다.")
 
-    # Do not clarify normal short imperatives like "해줘" if prior context exists.
-    if normalized in {"해줘", "해 줘", "그렇게 해줘", "그렇게 해 줘"} and recent:
+    followup_phrases = {
+        "해줘", "해 줘", "그렇게 해줘", "그렇게 해 줘", "계속", "계속해줘",
+        "다음", "그대로", "이대로", "그거", "그것도", "이것도", "아까 거", "아까거",
+    }
+    if normalized in followup_phrases and recent:
         ambiguity = 0
+
+    detected_intent = classify_intent(normalized)
+    if detected_intent in {"weather", "time", "news", "coding", "write_code", "debug_code", "translate", "summarize"}:
+        ambiguity = max(0, ambiguity - 2)
 
     should_clarify = ambiguity >= 3
 

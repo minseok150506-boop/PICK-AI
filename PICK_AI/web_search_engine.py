@@ -180,8 +180,8 @@ def weather(location: str) -> dict[str, Any]:
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat}&longitude={lon}"
         "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m"
-        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-        "&timezone=auto&forecast_days=2"
+        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code"
+        "&timezone=auto&forecast_days=7"
     )
     cur = data.get("current") or {}
     daily = data.get("daily") or {}
@@ -194,6 +194,11 @@ def weather(location: str) -> dict[str, Any]:
         "today_high_c": (daily.get("temperature_2m_max") or [None])[0],
         "today_low_c": (daily.get("temperature_2m_min") or [None])[0],
         "precip_probability": (daily.get("precipitation_probability_max") or [None])[0],
+        "daily_dates": daily.get("time") or [],
+        "daily_high_c": daily.get("temperature_2m_max") or [],
+        "daily_low_c": daily.get("temperature_2m_min") or [],
+        "daily_precip_probability": daily.get("precipitation_probability_max") or [],
+        "daily_weather_code": daily.get("weather_code") or [],
         "provider": "Open-Meteo",
         "source_url": "https://open-meteo.com/",
     }
@@ -207,8 +212,8 @@ def weather_coords(latitude: float, longitude: float) -> dict[str, Any]:
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat:.6f}&longitude={lon:.6f}"
         "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m"
-        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-        "&timezone=auto&forecast_days=2",
+        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code"
+        "&timezone=auto&forecast_days=7",
         timeout=6,
     )
     cur = data.get("current") or {}
@@ -226,6 +231,11 @@ def weather_coords(latitude: float, longitude: float) -> dict[str, Any]:
         "today_high_c": (daily.get("temperature_2m_max") or [None])[0],
         "today_low_c": (daily.get("temperature_2m_min") or [None])[0],
         "precip_probability": (daily.get("precipitation_probability_max") or [None])[0],
+        "daily_dates": daily.get("time") or [],
+        "daily_high_c": daily.get("temperature_2m_max") or [],
+        "daily_low_c": daily.get("temperature_2m_min") or [],
+        "daily_precip_probability": daily.get("precipitation_probability_max") or [],
+        "daily_weather_code": daily.get("weather_code") or [],
         "provider": "Open-Meteo",
         "source_url": "https://open-meteo.com/",
     }

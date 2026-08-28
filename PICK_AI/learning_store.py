@@ -178,4 +178,47 @@ def export_jsonl(user_id):
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+def _learning_tokens(text):
+    import re
+    return set(x.lower() for x in re.findall(
+        r"[A-Za-z][A-Za-z0-9_.:+#/-]{1,}|[가-힣]{2,}", str(text or "")
+    ))
+
+
+def format_training_examples(user_id, query, limit=3):
+    """Retrieve user-approved good-answer examples as style/task guidance."""
+    conn = connect()
+    rows = conn.execute(
+        """SELECT instruction,response FROM training_examples
+           WHERE user_id=? AND approved=1 ORDER BY id DESC LIMIT 300""",
+        (user_id,)
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return ""
+
+    q = _learning_tokens(query)
+    scored = []
+    for row in rows:
+        inst = str(row["instruction"] or "")
+        tokens = _learning_tokens(inst)
+        overlap = len(q & tokens)
+        score = overlap / max(1, len(q | tokens)) if q else 0.0
+        if score > 0 or len(rows) <= limit:
+            scored.append((score, inst, str(row["response"] or "")))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    picked = scored[:max(1, min(int(limit), 5))]
+    if not picked:
+        return ""
+
+    lines = [
+        "[User-approved answer examples]",
+        "Use these only as examples of helpful style/approach. Do not copy errors or facts blindly.",
+    ]
+    for _, instruction, response in picked:
+        lines.append(f"- User: {instruction[:700]}")
+        lines.append(f"  Helpful answer example: {response[:1200]}")
+    return "\n".join(lines)
+
+
 init_learning_schema()

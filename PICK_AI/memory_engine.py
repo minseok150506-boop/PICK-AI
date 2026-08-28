@@ -17,6 +17,7 @@ MEMORY_KINDS = {
     "task",          # ongoing tasks / TODO
     "fact",          # useful factual memory
     "summary",       # compressed conversation summary
+    "correction",    # user correction / newest truth
 }
 
 SENSITIVE_PATTERNS = [
@@ -133,7 +134,7 @@ def get_settings(user_id: int) -> dict[str, Any]:
             """INSERT INTO memory_settings(
                  user_id,enabled,auto_extract,auto_summary,max_context_items,
                  remember_preferences,remember_projects,remember_decisions,updated_at
-               ) VALUES(?,1,1,1,8,1,1,1,?)""",
+               ) VALUES(?,1,1,1,12,1,1,1,?)""",
             (user_id, now())
         )
         conn.commit()
@@ -151,7 +152,7 @@ def update_settings(user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         "enabled": 1 if payload.get("enabled", current["enabled"]) else 0,
         "auto_extract": 1 if payload.get("auto_extract", current["auto_extract"]) else 0,
         "auto_summary": 1 if payload.get("auto_summary", current["auto_summary"]) else 0,
-        "max_context_items": max(1, min(int(payload.get("max_context_items", current["max_context_items"])), 20)),
+        "max_context_items": max(1, min(int(payload.get("max_context_items", current["max_context_items"])), 30)),
         "remember_preferences": 1 if payload.get("remember_preferences", current["remember_preferences"]) else 0,
         "remember_projects": 1 if payload.get("remember_projects", current["remember_projects"]) else 0,
         "remember_decisions": 1 if payload.get("remember_decisions", current["remember_decisions"]) else 0,
@@ -289,9 +290,10 @@ def _score(memory: dict[str, Any], query_tokens: set[str]) -> float:
     importance = float(memory["importance"]) / 5.0
     confidence = float(memory["confidence"])
     pinned = 0.35 if memory["pinned"] else 0.0
+    correction = 0.55 if memory.get("kind") == "correction" else 0.0
     usage = min(math.log1p(int(memory["use_count"])) / 5.0, 0.25)
 
-    return lexical * 2.2 + importance * 0.45 + confidence * 0.25 + pinned + usage
+    return lexical * 2.2 + importance * 0.45 + confidence * 0.25 + pinned + correction + usage
 
 
 def retrieve_memories(user_id: int, query: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -344,58 +346,61 @@ def format_memory_context(user_id: int, query: str) -> str:
 
 
 def auto_extract_candidates(user_text: str) -> list[dict[str, Any]]:
-    """
-    Conservative rule-based extraction.
-    We only save clear first-person preferences, project choices, and decisions.
-    """
+    """Run on every user turn and keep only useful, non-sensitive long-term signals."""
     text = re.sub(r"\s+", " ", str(user_text or "")).strip()
     if not _safe_to_remember(text):
         return []
 
-    out = []
+    out: list[dict[str, Any]] = []
+    lowered = text.lower()
+
+    def add(kind: str, title: str, importance: int, confidence: float, limit: int = 1200):
+        item = {
+            "kind": kind,
+            "title": title,
+            "content": text[:limit],
+            "importance": importance,
+            "confidence": confidence,
+        }
+        if not any(x["kind"] == kind and x["content"] == item["content"] for x in out):
+            out.append(item)
+
+    correction_hints = (
+        "아니야", "아니에요", "그게 아니라", "그건 아니", "틀렸", "잘못됐",
+        "정정", "바꿀게", "바꿔줘", "이제부터", "앞으로는", "대신 ",
+    )
+    if any(h in lowered for h in correction_hints):
+        add("correction", "사용자 최신 정정", 5, 0.96)
 
     preference_patterns = [
-        r"(?:나는|저는|내가|제가)\s+(.{2,80}?)\s*(?:좋아해|좋아합니다|선호해|선호합니다)",
-        r"(?:나는|저는|내가|제가)\s+(.{2,80}?)\s*(?:싫어해|싫어합니다)",
-        r"(?:답변은|말투는|스타일은)\s+(.{2,100})",
+        r"(?:나는|저는|내가|제가)\s+(.{2,100}?)\s*(?:좋아해|좋아합니다|선호해|선호합니다|원해|원합니다)",
+        r"(?:나는|저는|내가|제가)\s+(.{2,100}?)\s*(?:싫어해|싫어합니다|원하지 않아|원하지 않습니다)",
+        r"(?:답변은|말투는|스타일은|설명은|언어는)\s+(.{2,140})",
+        r"(?:항상|앞으로)\s+(.{2,160})",
     ]
-    for p in preference_patterns:
-        m = re.search(p, text)
-        if m:
-            out.append({
-                "kind": "preference",
-                "title": "사용자 선호",
-                "content": text[:500],
-                "importance": 4,
-                "confidence": 0.78,
-            })
-            break
+    if any(re.search(p, text, re.I) for p in preference_patterns):
+        add("preference", "사용자 선호", 4, 0.86, 900)
 
     project_patterns = [
-        r"(?:프로젝트|서비스|앱|게임|AI|봇).{0,20}(?:이름|구조|기능|목표|색상|서버|배포)",
-        r"(?:PICK|하연 AI|Ollama|Synology|Render|GitHub)",
+        r"(?:프로젝트|서비스|앱|게임|AI|봇).{0,35}(?:이름|구조|기능|목표|색상|서버|배포|모델|설정|주소|도메인)",
+        r"(?:PICK|하연 AI|윤하연 AI|Ollama|Render|GitHub|Cloudflare|qwen)\b",
     ]
     if any(re.search(p, text, re.I) for p in project_patterns):
-        out.append({
-            "kind": "project",
-            "title": "프로젝트 정보",
-            "content": text[:1000],
-            "importance": 4,
-            "confidence": 0.72,
-        })
+        add("project", "프로젝트 정보", 4, 0.80, 1400)
 
     decision_patterns = [
-        r"(?:그걸로|이걸로|이 방식으로|그렇게)\s*(?:하자|해줘|진행|결정)",
-        r"(?:최종|결정|확정).{0,30}",
+        r"(?:그걸로|이걸로|이 방식으로|그렇게|이대로)\s*(?:하자|해줘|해 줘|진행|결정|가자)",
+        r"(?:최종|결정|확정|채택).{0,60}",
     ]
     if any(re.search(p, text, re.I) for p in decision_patterns):
-        out.append({
-            "kind": "decision",
-            "title": "사용자 결정",
-            "content": text[:800],
-            "importance": 4,
-            "confidence": 0.74,
-        })
+        add("decision", "사용자 결정", 4, 0.84, 1000)
+
+    explicit_memory = (
+        "기억해", "기억해줘", "기억해 줘", "잊지마", "잊지 마",
+        "꼭 기억", "저장해둬", "저장해 둬",
+    )
+    if any(h in lowered for h in explicit_memory):
+        add("fact", "사용자가 기억을 요청한 정보", 5, 0.97, 1500)
 
     return out
 

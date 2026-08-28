@@ -10,21 +10,18 @@ from memory_engine import (
 
 
 def should_refresh_summary(messages: list[dict], current_summary: str) -> bool:
-    if len(messages) < 10:
-        return False
-    # Refresh every ~8 messages after enough conversation exists.
-    return len(messages) % 8 in {0, 1}
+    return len(messages) >= 2
 
 
-def fallback_summary(messages: list[dict], limit_chars: int = 3500) -> str:
-    recent = messages[-16:]
+def fallback_summary(messages: list[dict], limit_chars: int = 5200) -> str:
+    recent = messages[-24:]
     lines = []
     for m in recent:
         role = "사용자" if m.get("role") == "user" else "PICK"
         content = re.sub(r"\s+", " ", str(m.get("content") or "")).strip()
         if not content:
             continue
-        lines.append(f"{role}: {content[:350]}")
+        lines.append(f"{role}: {content[:500]}")
     return "\n".join(lines)[-limit_chars:]
 
 

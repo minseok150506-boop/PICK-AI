@@ -9,6 +9,8 @@ REFERENCE_TERMS = {
     "이거", "그거", "저거", "이것", "그것", "저것",
     "아까", "전에", "위에", "그 파일", "그 코드", "그 버튼",
     "그걸", "그걸로", "그렇게", "그 방법", "그 모델", "그 주소",
+    "그 사이트", "그 설정", "그 명령어", "그대로", "이대로",
+    "계속", "다음", "이것도", "그것도", "아까 거", "아까거",
 }
 
 
@@ -51,7 +53,7 @@ def resolve_reference(user_message: str, history: list[dict] | None = None) -> C
         return ContextResolution(False, False, "", None, 0.0, "")
 
     candidates = []
-    for rev_idx, item in enumerate(reversed(history[-12:])):
+    for rev_idx, item in enumerate(reversed(history[-20:])):
         content = str(item.get("content") or "").strip()
         if not content:
             continue
@@ -60,7 +62,7 @@ def resolve_reference(user_message: str, history: list[dict] | None = None) -> C
         score = _score_candidate(content, message, distance)
         if role == "user":
             score += 0.3
-        candidates.append((score, len(history[-12:]) - 1 - rev_idx, content))
+        candidates.append((score, len(history[-20:]) - 1 - rev_idx, content))
 
     if not candidates:
         return ContextResolution(True, False, "", None, 0.0, "")
@@ -70,7 +72,7 @@ def resolve_reference(user_message: str, history: list[dict] | None = None) -> C
     confidence = min(1.0, best_score / 4.5)
 
     # We only claim resolution when confidence is reasonably strong.
-    resolved = confidence >= 0.38
+    resolved = confidence >= 0.30
     summary = re.sub(r"\s+", " ", content).strip()[:500] if resolved else ""
     excerpt = content[:1200] if resolved else ""
 

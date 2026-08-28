@@ -121,6 +121,7 @@ function applyCompactMode() {
 function startNewChatView() {
   state.currentChatId = null;
   state.messages = [];
+  localStorage.removeItem("pick:lastChatId");
   if ($("homeInput")) {
     $("homeInput").value = "";
     autoGrow($("homeInput"));
@@ -245,6 +246,7 @@ function renderMessages(scroll = true) {
 async function createChat() {
   const data = await api("/api/chat/new", {method: "POST"});
   state.currentChatId = data.chat_id;
+  localStorage.setItem("pick:lastChatId", String(state.currentChatId));
   state.chats = data.chats || state.chats;
   renderChatList();
   return state.currentChatId;
@@ -253,6 +255,7 @@ async function createChat() {
 async function openChat(id) {
   const data = await api(`/api/chat/${id}`);
   state.currentChatId = Number(id);
+  localStorage.setItem("pick:lastChatId", String(state.currentChatId));
   state.messages = data.messages || [];
   renderChatList();
   renderMessages();
@@ -323,8 +326,12 @@ function weatherQuery(text) {
 
 function getGpsForWeather(text) {
   return new Promise(resolve => {
-    if (!weatherQuery(text) || !navigator.geolocation || !window.isSecureContext) {
+    if (!weatherQuery(text)) {
       resolve({});
+      return;
+    }
+    if (!navigator.geolocation || !window.isSecureContext) {
+      resolve({gps_error: "unavailable"});
       return;
     }
 
@@ -334,10 +341,12 @@ function getGpsForWeather(text) {
         longitude: Number(pos.coords.longitude.toFixed(6)),
         location_accuracy_m: Math.round(pos.coords.accuracy || 0)
       }),
-      () => resolve({}),
+      err => resolve({
+        gps_error: err?.code === 1 ? "permission_denied" : "location_unavailable"
+      }),
       {
         enableHighAccuracy: false,
-        timeout: 2500,
+        timeout: 5000,
         maximumAge: 5 * 60 * 1000
       }
     );
@@ -814,14 +823,11 @@ async function rateAssistantMessage(index, rating) {
         assistant_answer: msg.content
       })
     });
-    showToast(rating > 0 ? "좋은 답변으로 기록했습니다." : "개선이 필요한 답변으로 기록했습니다.");
-    if (rating > 0) {
-      const approve = confirm("이 답변을 검수된 학습 데이터로 승인할까요?");
-      if (approve) {
-        await api(`/api/learning/feedback/${data.feedback_id}/approve`, {method: "POST"});
-        showToast("학습 데이터로 승인했습니다.");
-      }
-    }
+    showToast(
+      rating > 0
+        ? (data.auto_approved ? "좋은 답변을 자동 학습했습니다." : "좋은 답변으로 기록했습니다.")
+        : "개선이 필요한 답변으로 기록했습니다."
+    );
   } catch (e) {
     showToast(e.message);
   }
@@ -1196,7 +1202,14 @@ async function bootstrap() {
     applyCompactMode();
     renderChatList();
     await Promise.all([loadModels(), loadLanguages(), loadSeasonalMode()]);
-    startNewChatView();
+    const savedChatId = Number(localStorage.getItem("pick:lastChatId") || 0);
+    const savedChat = state.chats.find(c => Number(c.id) === savedChatId);
+    const targetChat = savedChat || state.chats[0] || null;
+    if (targetChat) {
+      await openChat(targetChat.id);
+    } else {
+      startNewChatView();
+    }
     refreshInferenceStatus();
   } catch (e) {
     showToast(e.message);

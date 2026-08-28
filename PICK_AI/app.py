@@ -46,7 +46,7 @@ from audit import write_audit
 from model_router import choose_model
 from language_support import SUPPORTED_LANGUAGES, language_instruction
 from coding_assistant import coding_instruction, is_coding_query
-from learning_store import add_feedback, approve_feedback, export_jsonl, list_feedback, training_stats
+from learning_store import add_feedback, approve_feedback, export_jsonl, list_feedback, training_stats, format_training_examples
 from semantic_learning import rebuild_user_index, retrieve as retrieve_semantic_memory
 from question_understanding import analyze_question, build_understanding_instruction
 from search_query_refiner import refine_search_query
@@ -216,26 +216,97 @@ def direct_realtime_or_identity_answer(text, payload=None):
         try:
             latitude = payload.get("latitude")
             longitude = payload.get("longitude")
+            location_words = re.sub(
+                r"(오늘|내일|모레|이번\s*주|주간|현재|지금|실시간|날씨|기온|온도|예보|"
+                r"알려\s*주세요|알려주세요|알려\s*줘|알려줘|어때요|어때)",
+                " ", raw
+            )
+            location_words = re.sub(r"[?!.~,]+", " ", location_words)
+            location_words = re.sub(r"\s+", " ", location_words).strip()
 
             if latitude is not None and longitude is not None:
                 w = weather_coords(latitude, longitude)
-                location_note = "브라우저 GPS 현재 위치"
+                location_note = "현재 위치"
             else:
+                if not location_words and payload.get("gps_error"):
+                    return (
+                        "현재 위치를 확인하지 못했습니다. 브라우저에서 PICK의 위치 권한을 허용한 뒤 다시 요청하시거나, "
+                        "예: '서울 내일 날씨 알려줘'처럼 지역명을 말씀해 주세요.",
+                        "weather",
+                    )
+                if not location_words:
+                    return (
+                        "현재 위치 정보가 필요합니다. 브라우저 위치 권한을 허용하거나 지역명을 함께 말씀해 주세요.",
+                        "weather",
+                    )
                 result = web_search(raw, mode="always")
                 w = result.get("weather") if isinstance(result, dict) else None
                 if not w:
                     err = result.get("error") if isinstance(result, dict) else None
                     return "날씨 정보를 가져오지 못했습니다." + ((" (" + str(err) + ")") if err else ""), "weather"
-                location_note = w.get("location") or "요청한 지역"
+                location_note = w.get("location") or location_words
 
-            answer = (
-                f"{location_note} 기준 날씨입니다.\n"
-                f"현재 {w.get('temperature_c')}°C, 체감 {w.get('apparent_c')}°C입니다.\n"
-                f"오늘 최고/최저 {w.get('today_high_c')}°C / {w.get('today_low_c')}°C이고, "
-                f"강수확률은 {w.get('precip_probability')}%입니다.\n"
-                f"현재 강수량 {w.get('precipitation_mm')}mm, 풍속 {w.get('wind_kmh')}km/h입니다.\n"
-                "출처: Open-Meteo"
-            )
+            dates = w.get("daily_dates") or []
+            highs = w.get("daily_high_c") or []
+            lows = w.get("daily_low_c") or []
+            rains = w.get("daily_precip_probability") or []
+            codes = w.get("daily_weather_code") or []
+
+            def at(values, index, fallback=None):
+                return values[index] if len(values) > index else fallback
+
+            def weather_name(code):
+                try:
+                    code = int(code)
+                except Exception:
+                    return ""
+                if code == 0: return "맑음"
+                if code in (1, 2, 3): return "구름"
+                if code in (45, 48): return "안개"
+                if code in (51, 53, 55, 56, 57): return "이슬비"
+                if code in (61, 63, 65, 66, 67): return "비"
+                if code in (71, 73, 75, 77): return "눈"
+                if code in (80, 81, 82): return "소나기"
+                if code in (85, 86): return "눈 소나기"
+                if code in (95, 96, 99): return "뇌우"
+                return ""
+
+            if "이번 주" in raw or "이번주" in raw or "주간" in raw:
+                lines = [f"{location_note} 기준 이번 주 날씨입니다."]
+                for i in range(min(7, len(dates), len(highs), len(lows))):
+                    condition = weather_name(at(codes, i))
+                    condition_text = f", {condition}" if condition else ""
+                    lines.append(
+                        f"- {at(dates, i)}: 최고 {at(highs, i)}°C / 최저 {at(lows, i)}°C, "
+                        f"강수확률 {at(rains, i, '-')}%{condition_text}"
+                    )
+                lines.append("출처: Open-Meteo")
+                return "\n".join(lines), "weather"
+
+            day_offset = 2 if "모레" in raw else (1 if "내일" in raw else 0)
+            day_label = "모레" if day_offset == 2 else ("내일" if day_offset == 1 else "오늘")
+            high = at(highs, day_offset, w.get("today_high_c"))
+            low = at(lows, day_offset, w.get("today_low_c"))
+            rain = at(rains, day_offset, w.get("precip_probability"))
+            forecast_date = at(dates, day_offset)
+            condition = weather_name(at(codes, day_offset))
+            condition_text = f" 날씨는 {condition}이고," if condition else ""
+
+            if day_offset == 0:
+                answer = (
+                    f"{location_note} 기준 오늘 날씨입니다.\n"
+                    f"현재 {w.get('temperature_c')}°C, 체감 {w.get('apparent_c')}°C입니다.\n"
+                    f"오늘은{condition_text} 최고 {high}°C / 최저 {low}°C, 강수확률 {rain}%입니다.\n"
+                    f"현재 강수량 {w.get('precipitation_mm')}mm, 풍속 {w.get('wind_kmh')}km/h입니다.\n"
+                    "출처: Open-Meteo"
+                )
+            else:
+                date_note = f" ({forecast_date})" if forecast_date else ""
+                answer = (
+                    f"{location_note} 기준 {day_label}{date_note} 날씨입니다.\n"
+                    f"{day_label}은{condition_text} 최고 {high}°C / 최저 {low}°C, 강수확률 {rain}%입니다.\n"
+                    "출처: Open-Meteo"
+                )
             return answer, "weather"
         except Exception as exc:
             return "날씨 정보를 가져오지 못했습니다. (" + str(exc) + ")", "weather"
@@ -846,9 +917,13 @@ def api_learning_feedback():
         session["user_id"], chat_id, message_id,
         rating, answer, note
     )
+    auto_approved = False
+    if rating == 1:
+        auto_approved = bool(approve_feedback(session["user_id"], fid))
     return jsonify({
         "ok": True,
         "feedback_id": fid,
+        "auto_approved": auto_approved,
         "stats": training_stats(session["user_id"])
     })
 
@@ -1140,6 +1215,11 @@ def api_chat_stream(chat_id):
     conn.close()
     update_chat_title(chat_id)
 
+    try:
+        maybe_auto_store(uid, chat_id, text)
+    except Exception as exc:
+        log("WARNING", f"memory auto-store: {exc}")
+
     direct_answer = direct_realtime_or_identity_answer(text, payload)
     if direct_answer is not None:
         direct_text, direct_kind = direct_answer
@@ -1154,6 +1234,11 @@ def api_chat_stream(chat_id):
             conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
             conn.commit()
             conn.close()
+
+            try:
+                refresh_summary_if_needed(uid, chat_id, get_messages(chat_id), summarizer=None)
+            except Exception as exc:
+                log("WARNING", f"direct summary refresh: {exc}")
 
             yield json.dumps({
                 "type": "meta",
@@ -1174,14 +1259,8 @@ def api_chat_stream(chat_id):
 
         return Response(direct_stream(), mimetype="application/x-ndjson")
 
-    # Conservative automatic memory extraction.
-    try:
-        maybe_auto_store(uid, chat_id, text)
-    except Exception as exc:
-        log("WARNING", f"memory auto-store: {exc}")
-
     history = get_messages(chat_id)
-    recent = [{"role": m["role"], "content": m["content"]} for m in history[:-1][-6:]]
+    recent = [{"role": m["role"], "content": m["content"]} for m in history[:-1][-16:]]
 
     orchestration = orchestrate(text, recent)
     question_analysis = analyze_question(text, recent)
@@ -1238,9 +1317,10 @@ def api_chat_stream(chat_id):
             log("WARNING", f"web search stream: {exc}")
 
     memory_text = format_memory_context_v2(uid, normalized_text)
+    learning_text = format_training_examples(uid, normalized_text, limit=3)
     profile_text = format_profile_context(uid)
     safe_web_text = wrap_untrusted_context("인터넷 검색 자료", web_text) if web_text else ""
-    combined_context = "\n\n".join(x for x in [profile_text, memory_text, safe_web_text] if x)
+    combined_context = "\n\n".join(x for x in [profile_text, memory_text, learning_text, safe_web_text] if x)
     system_extensions = build_system_extensions(uid, normalized_text)
     seasonal_mode = resolve_mode(
         uid,
@@ -1412,7 +1492,7 @@ def api_chat_send(chat_id):
     history = get_messages(chat_id)
     history_for_llm = [
         {"role": m["role"], "content": m["content"]}
-        for m in history[:-1][-6:]
+        for m in history[:-1][-16:]
     ]
     orchestration = orchestrate(text, history_for_llm)
     question_analysis = analyze_question(text, history_for_llm)
