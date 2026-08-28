@@ -5,15 +5,19 @@ import json
 import re
 import urllib.parse
 import urllib.request
+import urllib.error
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PICK-AI/1.0"
 TIMEOUT = 7
+_WEATHER_CACHE_TTL = 600
+_WEATHER_CACHE = {}
 
 
-def _get(url: str, timeout: int = TIMEOUT) -> bytes:
+def _get(url: str, timeout: int = TIMEOUT, retries: int = 2) -> bytes:
     req = urllib.request.Request(
         url,
         headers={
@@ -22,9 +26,27 @@ def _get(url: str, timeout: int = TIMEOUT) -> bytes:
             "Accept": "text/html,application/json,application/xml;q=0.9,*/*;q=0.8",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
-
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code != 429 or attempt >= retries:
+                raise
+            retry_after = exc.headers.get("Retry-After")
+            try:
+                delay = max(0.5, min(float(retry_after), 6.0)) if retry_after else 1.25 * (attempt + 1)
+            except Exception:
+                delay = 1.25 * (attempt + 1)
+            time.sleep(delay)
+        except Exception as exc:
+            last_error = exc
+            if attempt >= retries:
+                raise
+            time.sleep(0.5 * (attempt + 1))
+    raise last_error
 
 def _json(url: str, timeout: int = TIMEOUT) -> dict[str, Any]:
     return json.loads(_get(url, timeout).decode("utf-8", errors="replace"))
@@ -165,61 +187,100 @@ def search_youtube(query: str, limit: int = 5) -> list[dict[str, str]]:
     return out
 
 
-def weather(location: str) -> dict[str, Any]:
-    q = urllib.parse.quote(location)
-    geo = _json(
-        "https://geocoding-api.open-meteo.com/v1/search"
-        f"?name={q}&count=1&language=ko&format=json"
-    )
-    rows = geo.get("results") or []
-    if not rows:
-        raise RuntimeError(f"'{location}' 위치를 찾지 못했습니다.")
-    p = rows[0]
-    lat, lon = p["latitude"], p["longitude"]
-    data = _json(
-        "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m"
-        "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code"
-        "&timezone=auto&forecast_days=7"
-    )
-    cur = data.get("current") or {}
-    daily = data.get("daily") or {}
+def _cache_get_weather(key: str):
+    row = _WEATHER_CACHE.get(key)
+    if not row:
+        return None
+    saved_at, value = row
+    if time.time() - saved_at > _WEATHER_CACHE_TTL:
+        _WEATHER_CACHE.pop(key, None)
+        return None
+    return dict(value)
+
+
+def _cache_put_weather(key: str, value: dict[str, Any]) -> dict[str, Any]:
+    _WEATHER_CACHE[key] = (time.time(), dict(value))
+    return value
+
+
+def _wttr_weather(location: str) -> dict[str, Any]:
+    q = urllib.parse.quote(str(location).strip())
+    data = _json(f"https://wttr.in/{q}?format=j1", timeout=10)
+    root = data.get("data") if isinstance(data.get("data"), dict) else data
+
+    current_rows = root.get("current_condition") or []
+    current = current_rows[0] if current_rows else {}
+    days = root.get("weather") or []
+
+    def first_value(items):
+        if not items:
+            return ""
+        item = items[0]
+        if isinstance(item, dict):
+            return str(item.get("value") or "")
+        return str(item or "")
+
+    def num(value):
+        try:
+            return float(value)
+        except Exception:
+            return value if value not in ("", None) else None
+
+    nearest = (root.get("nearest_area") or [{}])[0]
+    area = first_value(nearest.get("areaName") or [])
+    region = first_value(nearest.get("region") or [])
+    country = first_value(nearest.get("country") or [])
+    display_location = ", ".join(x for x in [area, region, country] if x) or str(location)
+
+    dates = []
+    highs = []
+    lows = []
+    rains = []
+    for day in days:
+        dates.append(day.get("date"))
+        highs.append(num(day.get("maxtempC")))
+        lows.append(num(day.get("mintempC")))
+        hourly = day.get("hourly") or []
+        rain_values = []
+        for h in hourly:
+            try:
+                rain_values.append(int(h.get("chanceofrain") or 0))
+            except Exception:
+                pass
+        rains.append(max(rain_values) if rain_values else None)
+
     return {
-        "location": ", ".join(x for x in [p.get("name"), p.get("admin1"), p.get("country")] if x),
-        "temperature_c": cur.get("temperature_2m"),
-        "apparent_c": cur.get("apparent_temperature"),
-        "precipitation_mm": cur.get("precipitation"),
-        "wind_kmh": cur.get("wind_speed_10m"),
-        "today_high_c": (daily.get("temperature_2m_max") or [None])[0],
-        "today_low_c": (daily.get("temperature_2m_min") or [None])[0],
-        "precip_probability": (daily.get("precipitation_probability_max") or [None])[0],
-        "daily_dates": daily.get("time") or [],
-        "daily_high_c": daily.get("temperature_2m_max") or [],
-        "daily_low_c": daily.get("temperature_2m_min") or [],
-        "daily_precip_probability": daily.get("precipitation_probability_max") or [],
-        "daily_weather_code": daily.get("weather_code") or [],
-        "provider": "Open-Meteo",
-        "source_url": "https://open-meteo.com/",
+        "location": display_location,
+        "temperature_c": num(current.get("temp_C")),
+        "apparent_c": num(current.get("FeelsLikeC")),
+        "precipitation_mm": num(current.get("precipMM")),
+        "wind_kmh": num(current.get("windspeedKmph")),
+        "today_high_c": highs[0] if highs else None,
+        "today_low_c": lows[0] if lows else None,
+        "precip_probability": rains[0] if rains else None,
+        "daily_dates": dates,
+        "daily_high_c": highs,
+        "daily_low_c": lows,
+        "daily_precip_probability": rains,
+        "daily_weather_code": [],
+        "provider": "wttr.in fallback",
+        "source_url": "https://wttr.in/",
     }
 
 
-
-def weather_coords(latitude: float, longitude: float) -> dict[str, Any]:
-    lat = float(latitude)
-    lon = float(longitude)
+def _open_meteo_weather_from_coords(lat: float, lon: float, location_name: str) -> dict[str, Any]:
     data = _json(
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat:.6f}&longitude={lon:.6f}"
         "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code"
         "&timezone=auto&forecast_days=7",
-        timeout=6,
+        timeout=8,
     )
     cur = data.get("current") or {}
     daily = data.get("daily") or {}
     return {
-        "location": "현재 위치",
+        "location": location_name,
         "latitude": lat,
         "longitude": lon,
         "temperature_c": cur.get("temperature_2m"),
@@ -239,6 +300,64 @@ def weather_coords(latitude: float, longitude: float) -> dict[str, Any]:
         "provider": "Open-Meteo",
         "source_url": "https://open-meteo.com/",
     }
+
+
+def weather(location: str) -> dict[str, Any]:
+    clean_location = str(location or "").strip()
+    cache_key = "name:" + clean_location.lower()
+    cached = _cache_get_weather(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        q = urllib.parse.quote(clean_location)
+        geo = _json(
+            "https://geocoding-api.open-meteo.com/v1/search"
+            f"?name={q}&count=1&language=ko&format=json",
+            timeout=8,
+        )
+        rows = geo.get("results") or []
+        if not rows:
+            raise RuntimeError(f"'{clean_location}' 위치를 찾지 못했습니다.")
+        p = rows[0]
+        lat, lon = float(p["latitude"]), float(p["longitude"])
+        display = ", ".join(x for x in [p.get("name"), p.get("admin1"), p.get("country")] if x)
+        result = _open_meteo_weather_from_coords(lat, lon, display or clean_location)
+    except Exception as primary_error:
+        try:
+            result = _wttr_weather(clean_location)
+            result["fallback_reason"] = str(primary_error)
+        except Exception as fallback_error:
+            raise RuntimeError(
+                f"Open-Meteo failed: {primary_error}; fallback failed: {fallback_error}"
+            ) from fallback_error
+
+    return _cache_put_weather(cache_key, result)
+
+
+def weather_coords(latitude: float, longitude: float) -> dict[str, Any]:
+    lat = float(latitude)
+    lon = float(longitude)
+    cache_key = f"coord:{lat:.3f},{lon:.3f}"
+    cached = _cache_get_weather(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        result = _open_meteo_weather_from_coords(lat, lon, "current location")
+    except Exception as primary_error:
+        try:
+            result = _wttr_weather(f"{lat:.4f},{lon:.4f}")
+            result["location"] = "current location"
+            result["latitude"] = lat
+            result["longitude"] = lon
+            result["fallback_reason"] = str(primary_error)
+        except Exception as fallback_error:
+            raise RuntimeError(
+                f"Open-Meteo failed: {primary_error}; fallback failed: {fallback_error}"
+            ) from fallback_error
+
+    return _cache_put_weather(cache_key, result)
 
 
 def _extract_weather_location(text: str) -> str:
