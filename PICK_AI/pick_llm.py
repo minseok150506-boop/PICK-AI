@@ -145,6 +145,7 @@ PICK:"""
 
     def generate(self, text, state=None, history=None, web_context=''):
         prompt = self._prompt(text, state, history, web_context)
+        coding_mode = "[Coding mode]" in prompt
         last_error = None
         available = None
         try:
@@ -163,10 +164,10 @@ PICK:"""
                     "keep_alive": "30m",
                     "think": False,
                     "options": {
-                        "temperature": 0.40,
-                        "top_p": 0.92,
-                        "num_ctx": 6144,
-                        "num_predict": 760,
+                        "temperature": 0.14 if coding_mode else 0.40,
+                        "top_p": 0.88 if coding_mode else 0.92,
+                        "num_ctx": 12288 if coding_mode else 6144,
+                        "num_predict": 1800 if coding_mode else 760,
                     }
                 }, timeout=self.timeout)
                 answer = str(data.get("response") or "").strip()
@@ -230,10 +231,10 @@ def stream_generate(prompt, model=None, timeout=300):
             "keep_alive": "30m",
             "think": False,
             "options": {
-                "temperature": 0.18 if coding_mode else 0.38,
-                "top_p": 0.92,
-                "num_ctx": 6144,
-                "num_predict": 900 if coding_mode else 650,
+                "temperature": 0.14 if coding_mode else 0.38,
+                "top_p": 0.88 if coding_mode else 0.92,
+                "num_ctx": 12288 if coding_mode else 6144,
+                "num_predict": 1800 if coding_mode else 650,
             },
         }
         req = urllib.request.Request(
