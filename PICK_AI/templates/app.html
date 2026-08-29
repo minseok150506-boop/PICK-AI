@@ -37,13 +37,13 @@
       <button id="learningBtn" class="sidebar-link sidebar-button" type="button">학습 센터</button>
       <button id="settingsBtn" class="sidebar-link sidebar-button" type="button">설정</button>
       {% if is_admin %}
-      <a class="sidebar-link" href="/admin/status">관리자 상태</a>
+      <a class="sidebar-link" href="/admin/status">관리자 관리</a>
       {% endif %}
       <div class="profile">
         <div class="profile-avatar">{{ username[0]|upper if username else 'U' }}</div>
         <div class="profile-info">
           <strong>{{ username }}</strong>
-          <span>{{ '관리자' if is_admin else '사용자' }}</span>
+          <span>{{ admin_label if is_admin else '사용자' }}</span>
         </div>
         <a class="logout-button" href="/logout" title="로그아웃">↗</a>
       </div>
@@ -66,7 +66,6 @@
       </button>
       <div class="topbar-space"></div>
       <div id="queueStatus" class="queue-status" title="AI 처리 상태">AI 준비</div>
-      <button id="topNewChatBtn" class="icon-button" type="button" title="새 채팅">✎</button>
     </header>
 
     <section id="homeScreen" class="screen home-screen active">
@@ -92,7 +91,7 @@
           <button type="button" data-prompt="Python 코드를 작성해 주세요">
             <strong>코드 작성</strong><span>아이디어를 코드로 구현</span>
           </button>
-          <button type="button" data-prompt="Ollama의 최신 정보를 찾아서 설명해 주세요">
+          <button type="button" data-prompt="PICK으로 인터넷에서 최신 정보를 찾아서 설명해 주세요">
             <strong>인터넷 검색</strong><span>최신 자료를 찾아 요약</span>
           </button>
         </div>
@@ -264,11 +263,15 @@
           <button id="closeSettingsBtn" class="icon-button" type="button">✕</button>
         </div>
 
-        <div class="setting-row seasonal-auto-row">
+        <label class="setting-row seasonal-auto-row">
           <div>
             <strong>이벤트 모드</strong>
-            <span>한국 날짜에 따라 자동으로 바뀝니다. 수동 변경은 없습니다.</span>
+            <span>기본은 자동 변경이며, 사용자가 고른 이벤트가 있으면 사용자 설정을 우선합니다.</span>
           </div>
+          <select id="settingsSeasonalOverride"><option value="auto">자동</option></select>
+        </label>
+        <div class="setting-row seasonal-auto-row">
+          <div><strong>현재 적용 이벤트</strong><span>자동 또는 사용자 우선 결과</span></div>
           <div id="seasonalModeStatus" class="seasonal-mode-status">자동</div>
         </div>
 
@@ -283,7 +286,7 @@
         </label>
 
         <label class="setting-row">
-          <div><strong>AI 모델</strong><span>미니PC에 설치된 Ollama 모델 중 선택</span></div>
+          <div><strong>AI 모델</strong><span>PICK에서 사용할 AI 모델을 선택합니다.</span></div>
           <select id="settingsModel"><option value="auto">자동 선택</option></select>
         </label>
 

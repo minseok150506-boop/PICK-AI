@@ -31,7 +31,9 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'user',
+        admin_granted_by INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS chats (
@@ -74,6 +76,7 @@ def init_db():
         selected_model TEXT NOT NULL DEFAULT 'auto',
         web_mode TEXT NOT NULL DEFAULT 'auto',
         compact_mode INTEGER NOT NULL DEFAULT 0,
+        seasonal_override TEXT NOT NULL DEFAULT 'auto',
         updated_at TEXT NOT NULL,
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -123,6 +126,10 @@ def init_db():
         conn.execute("ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'local'")
     if "preferred_language" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN preferred_language TEXT NOT NULL DEFAULT 'auto'")
+    if "role" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+    if "admin_granted_by" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN admin_granted_by INTEGER")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
 
@@ -139,6 +146,8 @@ def init_db():
         conn.execute("ALTER TABLE user_settings ADD COLUMN web_mode TEXT NOT NULL DEFAULT 'auto'")
     if "compact_mode" not in settings_cols:
         conn.execute("ALTER TABLE user_settings ADD COLUMN compact_mode INTEGER NOT NULL DEFAULT 0")
+    if "seasonal_override" not in settings_cols:
+        conn.execute("ALTER TABLE user_settings ADD COLUMN seasonal_override TEXT NOT NULL DEFAULT 'auto'")
     if "updated_at" not in settings_cols:
         conn.execute("ALTER TABLE user_settings ADD COLUMN updated_at TEXT")
         conn.execute("UPDATE user_settings SET updated_at=? WHERE updated_at IS NULL", (now(),))
@@ -168,11 +177,11 @@ def init_db():
     row = conn.execute("SELECT id FROM users WHERE username=?", (ADMIN_USERNAME,)).fetchone()
     hashed = generate_password_hash(ADMIN_PASSWORD)
     if row:
-        conn.execute("UPDATE users SET password_hash=? WHERE id=?", (hashed, row["id"]))
+        conn.execute("UPDATE users SET password_hash=?,role='owner',admin_granted_by=NULL WHERE id=?", (hashed, row["id"]))
     else:
         conn.execute(
-            "INSERT INTO users(username,password_hash,created_at) VALUES(?,?,?)",
-            (ADMIN_USERNAME, hashed, now())
+            "INSERT INTO users(username,password_hash,created_at,role,admin_granted_by) VALUES(?,?,?,?,NULL)",
+            (ADMIN_USERNAME, hashed, now(), "owner")
         )
 
     conn.commit()

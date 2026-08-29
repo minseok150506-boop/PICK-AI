@@ -299,15 +299,24 @@ def resolve_mode(
     user_id: int | None = None,
     user_timezone: str | None = None,
     country: str | None = None,
+    override: str | None = None,
 ) -> SeasonalMode:
-    mode_id, timezone_name, country_info = automatic_mode_id(user_timezone, country)
+    automatic = True
+    override_id = str(override or "auto").strip()
+    if override_id != "auto" and override_id in MODES:
+        timezone_name = validate_timezone(user_timezone, "Asia/Seoul")
+        country_info = resolve_country(timezone_name, country)
+        mode_id = override_id
+        automatic = False
+    else:
+        mode_id, timezone_name, country_info = automatic_mode_id(user_timezone, country)
     data = MODES[mode_id]
 
     return SeasonalMode(
         id=mode_id,
         name=data["name"],
         active=mode_id != "none",
-        automatic=True,
+        automatic=automatic,
         banner=data["banner"],
         emoji=data["emoji"],
         accent=data["accent"],

@@ -58,6 +58,12 @@ from country_resolver import resolve_country
 from google_auth import configure_google, google_enabled, oauth
 from inference_guard import guard, InferenceBusy, CircuitOpen
 from context_safety import wrap_untrusted_context
+from admin_roles import (
+    is_admin as role_is_admin,
+    is_owner as role_is_owner,
+    admin_label as role_admin_label,
+    list_users_for_admin, promote_admin, demote_admin,
+)
 import migrations
 
 from native_ai_provider import native_available, generate_native, choose_provider
@@ -176,6 +182,18 @@ def login_required_view():
     return None
 
 
+def current_user_is_admin():
+    return role_is_admin(session.get("user_id"))
+
+
+def current_user_is_owner():
+    return role_is_owner(session.get("user_id"))
+
+
+def current_admin_label():
+    return role_admin_label(session.get("user_id"))
+
+
 def user_owns_chat(chat_id, user_id):
     conn = connect()
     row = conn.execute(
@@ -224,27 +242,21 @@ def direct_realtime_or_identity_answer(text, payload=None):
             location_words = re.sub(r"[?!.~,]+", " ", location_words)
             location_words = re.sub(r"\s+", " ", location_words).strip()
 
-            if latitude is not None and longitude is not None:
-                w = weather_coords(latitude, longitude)
-                location_note = "현재 위치"
-            else:
-                if not location_words and payload.get("gps_error"):
-                    return (
-                        "현재 위치를 확인하지 못했습니다. 브라우저에서 PICK의 위치 권한을 허용한 뒤 다시 요청하시거나, "
-                        "예: '서울 내일 날씨 알려줘'처럼 지역명을 말씀해 주세요.",
-                        "weather",
-                    )
-                if not location_words:
-                    return (
-                        "현재 위치 정보가 필요합니다. 브라우저 위치 권한을 허용하거나 지역명을 함께 말씀해 주세요.",
-                        "weather",
-                    )
+            # Explicitly named places have priority over browser GPS.
+            if location_words:
                 result = web_search(raw, mode="always")
                 w = result.get("weather") if isinstance(result, dict) else None
                 if not w:
                     err = result.get("error") if isinstance(result, dict) else None
                     return "날씨 정보를 가져오지 못했습니다." + ((" (" + str(err) + ")") if err else ""), "weather"
                 location_note = w.get("location") or location_words
+            elif latitude is not None and longitude is not None:
+                w = weather_coords(latitude, longitude)
+                location_note = "현재 위치"
+            else:
+                if payload.get("gps_error"):
+                    return ("현재 위치를 확인하지 못했습니다. 위치 권한을 허용하거나 지역명을 말씀해 주세요.", "weather")
+                return ("현재 위치 정보가 필요합니다. 위치 권한을 허용하거나 지역명을 함께 말씀해 주세요.", "weather")
 
             dates = w.get("daily_dates") or []
             highs = w.get("daily_high_c") or []
@@ -311,38 +323,6 @@ def direct_realtime_or_identity_answer(text, payload=None):
         except Exception as exc:
             return "날씨 정보를 가져오지 못했습니다. (" + str(exc) + ")", "weather"
 
-    if "뉴스" in raw and not any(
-        word in raw for word in ("왜", "원인", "영향", "전망", "분석", "비교", "의미")
-    ):
-        try:
-            result = web_search(raw, mode="always")
-            rows = (result.get("results") or []) if isinstance(result, dict) else []
-            if not rows:
-                return "최신 뉴스 검색 결과를 가져오지 못했습니다.", "news"
-
-            lines = [
-                "최신 뉴스 검색 결과를 중요도 판단 없이 최신순으로 정리했습니다.",
-                ""
-            ]
-            for i, row in enumerate(rows[:8], 1):
-                title = str(row.get("title") or "").strip()
-                provider = str(row.get("provider") or "Google News").strip()
-                published = str(row.get("published_at") or row.get("snippet") or "").strip()
-                lines.append(f"{i}. {title}")
-                lines.append(f"   언론사: {provider}")
-                if published:
-                    lines.append(f"   게시: {published}")
-                if row.get("url"):
-                    lines.append(f"   링크: {row.get('url')}")
-                lines.append("")
-            lines.append(
-                "위 목록은 Google News RSS에서 확인한 기사 제목·언론사·게시시각을 기준으로 했습니다. "
-                "원하시면 특정 기사들을 골라 배경·영향·쟁점까지 이어서 설명해 드릴 수 있습니다."
-            )
-            return "\n".join(lines), "news"
-        except Exception as exc:
-            return "최신 뉴스 정보를 가져오지 못했습니다. (" + str(exc) + ")", "news"
-
     time_phrases = (
         "몇 시", "몇시", "현재 시간", "지금 시간", "시간 알려", "오늘 날짜", "오늘 며칠",
         "몇 일이야", "몇일이야", "무슨 요일", "오늘 요일", "지금 몇 월", "지금 몇월"
@@ -361,17 +341,17 @@ def direct_realtime_or_identity_answer(text, payload=None):
 def get_user_settings(user_id):
     conn = connect()
     row = conn.execute(
-        "SELECT selected_model,web_mode,compact_mode,updated_at FROM user_settings WHERE user_id=?",
+        "SELECT selected_model,web_mode,compact_mode,seasonal_override,updated_at FROM user_settings WHERE user_id=?",
         (user_id,)
     ).fetchone()
     if not row:
         conn.execute(
-            "INSERT INTO user_settings(user_id,selected_model,web_mode,compact_mode,updated_at) VALUES(?,?,?,?,?)",
-            (user_id, "auto", "auto", 0, now())
+            "INSERT INTO user_settings(user_id,selected_model,web_mode,compact_mode,seasonal_override,updated_at) VALUES(?,?,?,?,?,?)",
+            (user_id, "auto", "auto", 0, "auto", now())
         )
         conn.commit()
         row = conn.execute(
-            "SELECT selected_model,web_mode,compact_mode,updated_at FROM user_settings WHERE user_id=?",
+            "SELECT selected_model,web_mode,compact_mode,seasonal_override,updated_at FROM user_settings WHERE user_id=?",
             (user_id,)
         ).fetchone()
     conn.close()
@@ -510,7 +490,8 @@ def index():
     return render_template(
         "app.html",
         username=session.get("username", ""),
-        is_admin=session.get("username") == ADMIN_USERNAME
+        is_admin=current_user_is_admin(),
+        admin_label=current_admin_label()
     )
 
 
@@ -565,7 +546,7 @@ def api_inference_status():
 def api_admin_overview():
     auth_err=require_login_json()
     if auth_err:return auth_err
-    if session.get("username")!=ADMIN_USERNAME:
+    if not current_user_is_admin():
         return jsonify({"ok":False,"error":"관리자만 접근할 수 있습니다."}),403
     conn=connect()
     counts={
@@ -746,7 +727,7 @@ def api_account_delete():
     auth_err=require_login_json()
     if auth_err:return auth_err
     uid=session["user_id"]; username=session.get("username")
-    if username==ADMIN_USERNAME:return jsonify({"ok":False,"error":"기본 관리자 계정은 이 화면에서 삭제할 수 없습니다."}),400
+    if current_user_is_admin():return jsonify({"ok":False,"error":"관리자 계정은 이 화면에서 삭제할 수 없습니다."}),400
     password=str((request.get_json(silent=True) or {}).get("password") or "")
     conn=connect(); user=conn.execute("SELECT * FROM users WHERE id=?",(uid,)).fetchone()
     if not user or not check_password_hash(user["password_hash"],password):
@@ -759,9 +740,46 @@ def api_account_delete():
 def api_admin_audit():
     auth_err=require_login_json()
     if auth_err:return auth_err
-    if session.get("username")!=ADMIN_USERNAME:return jsonify({"ok":False,"error":"관리자만 접근할 수 있습니다."}),403
+    if not current_user_is_admin():return jsonify({"ok":False,"error":"관리자만 접근할 수 있습니다."}),403
     conn=connect(); rows=conn.execute("SELECT id,user_id,username,event,detail,ip_hint,created_at FROM audit_events ORDER BY id DESC LIMIT 200").fetchall(); conn.close()
     return jsonify({"ok":True,"events":[dict(r) for r in rows]})
+
+@app.get("/api/admin/users")
+def api_admin_users():
+    auth_err = require_login_json()
+    if auth_err: return auth_err
+    if not current_user_is_admin():
+        return jsonify({"ok":False,"error":"관리자만 접근할 수 있습니다."}),403
+    return jsonify({"ok":True,"admin_label":current_admin_label(),"users":list_users_for_admin(session["user_id"])})
+
+
+@app.post("/api/admin/users/<int:target_id>/promote")
+def api_admin_user_promote(target_id):
+    auth_err = require_login_json()
+    if auth_err: return auth_err
+    try:
+        promote_admin(session["user_id"], target_id)
+        write_audit("admin.promote",user_id=session["user_id"],username=session.get("username"),detail=f"target_user_id={target_id}")
+        return jsonify({"ok":True,"users":list_users_for_admin(session["user_id"])})
+    except PermissionError as exc:
+        return jsonify({"ok":False,"error":str(exc)}),403
+    except (ValueError,LookupError) as exc:
+        return jsonify({"ok":False,"error":str(exc)}),400
+
+
+@app.post("/api/admin/users/<int:target_id>/demote")
+def api_admin_user_demote(target_id):
+    auth_err = require_login_json()
+    if auth_err: return auth_err
+    try:
+        demote_admin(session["user_id"], target_id)
+        write_audit("admin.demote",user_id=session["user_id"],username=session.get("username"),detail=f"target_user_id={target_id}")
+        return jsonify({"ok":True,"users":list_users_for_admin(session["user_id"])})
+    except PermissionError as exc:
+        return jsonify({"ok":False,"error":str(exc)}),403
+    except (ValueError,LookupError) as exc:
+        return jsonify({"ok":False,"error":str(exc)}),400
+
 
 @app.get("/api/diagnostics")
 def api_diagnostics():
@@ -842,7 +860,11 @@ def api_seasonal_mode_get():
         return auth_err
     user_timezone = validate_timezone(request.args.get("timezone"), "Asia/Seoul")
     country = (request.args.get("country") or "").upper() or None
-    mode = resolve_mode(session["user_id"], user_timezone=user_timezone, country=country)
+    seasonal_override = get_user_settings(session["user_id"]).get("seasonal_override", "auto")
+    mode = resolve_mode(
+        session["user_id"], user_timezone=user_timezone, country=country,
+        override=seasonal_override,
+    )
     return jsonify({
         "ok": True,
         "mode": mode.to_dict(),
@@ -1050,6 +1072,9 @@ def api_settings_save():
     if web_mode not in {"auto", "always", "off"}:
         web_mode = "auto"
     compact_mode = 1 if payload.get("compact_mode") else 0
+    seasonal_override = str(payload.get("seasonal_override", "auto")).strip() or "auto"
+    if seasonal_override not in {"auto", *list_seasonal_modes().keys()}:
+        seasonal_override = "auto"
 
     if selected_model != "auto":
         try:
@@ -1060,14 +1085,15 @@ def api_settings_save():
 
     conn = connect()
     conn.execute(
-        """INSERT INTO user_settings(user_id,selected_model,web_mode,compact_mode,updated_at)
-           VALUES(?,?,?,?,?)
+        """INSERT INTO user_settings(user_id,selected_model,web_mode,compact_mode,seasonal_override,updated_at)
+           VALUES(?,?,?,?,?,?)
            ON CONFLICT(user_id) DO UPDATE SET
              selected_model=excluded.selected_model,
              web_mode=excluded.web_mode,
              compact_mode=excluded.compact_mode,
+             seasonal_override=excluded.seasonal_override,
              updated_at=excluded.updated_at""",
-        (session["user_id"], selected_model, web_mode, compact_mode, now())
+        (session["user_id"], selected_model, web_mode, compact_mode, seasonal_override, now())
     )
     conn.commit()
     conn.close()
@@ -1773,7 +1799,7 @@ def api_admin_backup():
     auth_err = require_login_json()
     if auth_err:
         return auth_err
-    if session.get("username") != ADMIN_USERNAME:
+    if not current_user_is_admin():
         return jsonify({"ok": False, "error": "관리자만 사용할 수 있습니다."}), 403
     try:
         import backup_db
@@ -1788,7 +1814,7 @@ def admin_status():
     guard = login_required_view()
     if guard:
         return guard
-    if session.get("username") != ADMIN_USERNAME:
+    if not current_user_is_admin():
         return "관리자만 접근할 수 있습니다.", 403
 
     conn = connect()
@@ -1814,7 +1840,8 @@ def admin_status():
         msgs=messages,
         logs=logs,
         ollama_ok=ollama_ok,
-        models=models
+        models=models,
+        admin_label=current_admin_label()
     )
 
 

@@ -10,7 +10,8 @@ const state = {
   settings: {
     selected_model: "auto",
     web_mode: "auto",
-    compact_mode: 0
+    compact_mode: 0,
+    seasonal_override: "auto"
   },
   models: [],
   languages: {},
@@ -620,6 +621,7 @@ async function openSettings() {
     }
     if ($("settingsWebMode")) $("settingsWebMode").value = state.settings.web_mode || "auto";
     if ($("settingsCompact")) $("settingsCompact").checked = Boolean(state.settings.compact_mode);
+    if ($("settingsSeasonalOverride")) $("settingsSeasonalOverride").value = state.settings.seasonal_override || "auto";
 
     setScreen("settingsScreen");
     closeSidebar();
@@ -633,6 +635,7 @@ async function saveSettings() {
     const selectedModel = $("settingsModel")?.value || "auto";
     const webMode = $("settingsWebMode")?.value || "auto";
     const compact = Boolean($("settingsCompact")?.checked);
+    const seasonalOverride = $("settingsSeasonalOverride")?.value || "auto";
 
     const data = await api("/api/settings", {
       method: "POST",
@@ -640,10 +643,12 @@ async function saveSettings() {
       body: JSON.stringify({
         selected_model: selectedModel,
         web_mode: webMode,
-        compact_mode: compact
+        compact_mode: compact,
+        seasonal_override: seasonalOverride
       })
     });
     state.settings = data.settings || state.settings;
+    await loadSeasonalMode();
 
     if ($("settingsLanguage")) {
       await api("/api/language", {
@@ -713,7 +718,7 @@ async function runManualWebSearch() {
     const rows = data.results || [];
     box.innerHTML = rows.length ? rows.map(r => `
       <a class="search-result-card" href="${escapeHtml(r.url)}" target="_blank" rel="noopener">
-        <span class="search-provider">${escapeHtml(r.provider || "Web")}</span>
+        <span class="search-provider">${escapeHtml(r.provider || "PICK Search")}</span>
         <strong>${escapeHtml(r.title || r.url)}</strong>
         <p>${escapeHtml(r.snippet || "")}</p>
         <small>${escapeHtml(r.url || "")}</small>
@@ -799,7 +804,7 @@ async function runDiagnostics() {
   try {
     const d = await api("/api/diagnostics");
     if (el) {
-      el.textContent = `DB ${d.database ? "정상" : "오류"} · Ollama ${d.ollama ? "정상" : "오류"} · 모델 ${d.models?.length || 0}개 · 시간 ${d.time?.accurate ? "NTP 동기화" : "서버 시계"}`;
+      el.textContent = `DB ${d.database ? "정상" : "오류"} · PICK AI ${d.ollama ? "정상" : "오류"} · 모델 ${d.models?.length || 0}개 · 시간 ${d.time?.accurate ? "NTP 동기화" : "서버 시계"}`;
     }
   } catch (e) {
     if (el) el.textContent = e.message;
@@ -924,9 +929,18 @@ async function loadSeasonalMode() {
       loadSeasonalMode();
     }, recheckSeconds * 1000);
 
+    const seasonalSelect = $("settingsSeasonalOverride");
+    if (seasonalSelect) {
+      const modes = data.modes || {};
+      seasonalSelect.innerHTML = '<option value="auto">자동</option>' +
+        Object.entries(modes).map(([id,name]) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`).join("");
+      seasonalSelect.value = state.settings?.seasonal_override || "auto";
+    }
+
     const status = $("seasonalModeStatus");
     if (status) {
-      status.textContent = mode.active ? `${mode.emoji || ""} ${mode.name}`.trim() : "기본 모드";
+      const sourceText = mode.automatic ? "자동" : "사용자 우선";
+      status.textContent = `${sourceText} · ${mode.active ? `${mode.emoji || ""} ${mode.name}`.trim() : "기본 모드"}`;
       status.title = mode.country_mismatch
         ? "브라우저 지역과 시간대가 달라 시간대 기준 국가를 사용했습니다."
         : `시간대: ${mode.timezone || getClientTimezone()}`;

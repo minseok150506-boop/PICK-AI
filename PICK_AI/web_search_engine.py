@@ -471,15 +471,21 @@ def format_for_llm(result: dict[str, Any]) -> str:
     if result.get("kind") == "news":
         rows = result.get("results") or []
         if not rows:
-            return "[뉴스 검색 결과를 가져오지 못했습니다. 최신 뉴스를 확인했다고 단정하지 마세요.]"
+            return "[PICK NEWS DETAIL MODE]\nPICK Search에서 최신 뉴스 결과를 가져오지 못했습니다."
         lines = [
-            "[최신 뉴스 자료]",
-            "아래 기사 제목, 언론사, 게시시각만 근거로 답하세요. 확인되지 않은 내용을 추가하지 마세요.",
+            "[PICK NEWS DETAIL MODE]",
+            "[PICK Search 최신 뉴스 자료]",
+            "제목 목록만 나열하지 말고 먼저 핵심을 요약하세요.",
+            "그 다음 주요 사건별로 무슨 일인지, 왜 중요한지, 영향 또는 앞으로 볼 점을 설명하세요.",
+            "검색 자료에 없는 구체적인 숫자, 발언, 원인, 결과는 추측하지 마세요.",
+            "같은 사건으로 보이는 기사는 묶어서 중복을 줄이세요.",
+            "마지막에는 언론사와 URL을 출처로 정리하세요.",
         ]
-        for i, row in enumerate(rows, 1):
+        for i, row in enumerate(rows[:10], 1):
             lines.extend([
-                f"{i}. {row.get('title','')}",
-                f"언론사: {row.get('provider','Google News')}",
+                f"[기사 {i}]",
+                f"제목: {row.get('title','')}",
+                f"언론사: {row.get('provider','PICK Search')}",
                 f"게시시각: {row.get('published_at') or row.get('snippet','')}",
                 f"URL: {row.get('url','')}",
             ])
