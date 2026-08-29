@@ -7,6 +7,7 @@ const state = {
   messages: [],
   sending: false,
   abortController: null,
+  jobPollers: {},
   settings: {
     selected_model: "auto",
     web_mode: "auto",
@@ -304,6 +305,16 @@ function renderMessages(scroll = true) {
   if (scroll) requestAnimationFrame(() => box.scrollTop = box.scrollHeight);
 }
 
+function backgroundJobText(job){
+  if(job?.status==="queued")return "질문이 저장되었습니다. 답변 순서를 기다리고 있습니다… 사이트를 나가도 계속됩니다.";
+  if(job?.status==="running")return job.partial_text||"PICK이 백그라운드에서 답변을 생성하고 있습니다… 사이트를 나가도 계속됩니다.";
+  return job?.result_text||job?.partial_text||"답변을 준비하고 있습니다…";
+}
+function mergeBackgroundJobs(jobs){for(const job of(Array.isArray(jobs)?jobs:[])){const id=Number(job.id);if(!id)continue;let m=state.messages.find(x=>Number(x.__jobId)===id);if(!m){m={role:"assistant",content:"",__jobId:id};state.messages.push(m);}m.content=backgroundJobText(job);m.__jobStatus=job.status;m.__pickActivity=["queued","running"].includes(job.status);if(Array.isArray(job.sources))m.sources=job.sources;}}
+async function refreshChatAfterBackgroundJob(chatId){if(Number(state.currentChatId)!==Number(chatId))return;const data=await api(`/api/chat/${chatId}`);state.messages=data.messages||[];mergeBackgroundJobs(data.jobs||[]);renderMessages(false);for(const job of(data.jobs||[]))pollBackgroundJob(job.id,chatId);try{const boot=await api("/api/bootstrap");state.chats=boot.chats||state.chats;renderChatList();}catch(_){}}
+function pollBackgroundJob(jobId,chatId){const key=String(jobId);if(state.jobPollers[key])return;state.jobPollers[key]=true;const tick=async()=>{try{const data=await api(`/api/jobs/${jobId}`),job=data.job||{};if(Number(state.currentChatId)===Number(chatId)){mergeBackgroundJobs([job]);renderMessages(false);}if(["done","failed","cancelled"].includes(job.status)){delete state.jobPollers[key];await refreshChatAfterBackgroundJob(chatId);if(job.status==="done")showToast("백그라운드 답변이 완료되었습니다.");return;}setTimeout(tick,900);}catch(_){setTimeout(tick,1800);}};tick();}
+function resumeBackgroundJobs(jobs,chatId){const rows=Array.isArray(jobs)?jobs:[];mergeBackgroundJobs(rows);for(const job of rows)pollBackgroundJob(job.id,chatId);}
+
 async function createChat() {
   const data = await api("/api/chat/new", {method: "POST"});
   state.currentChatId = data.chat_id;
@@ -318,6 +329,7 @@ async function openChat(id) {
   state.currentChatId = Number(id);
   localStorage.setItem("pick:lastChatId", String(state.currentChatId));
   state.messages = data.messages || [];
+  resumeBackgroundJobs(data.jobs || [], state.currentChatId);
   renderChatList();
   renderMessages();
   setScreen("chatScreen");
@@ -435,195 +447,7 @@ function buildFollowUps(query) {
 }
 
 
-async function sendTextStreaming(text) {
-  const clean = String(text || "").trim();
-  if (!clean || state.sending) return;
-  if (!state.currentChatId) await createChat();
-
-  state.sending = true;
-  updateSendButtons();
-
-  state.messages.push({role: "user", content: clean});
-
-  const lowerQuery = clean.toLowerCase();
-  const codingQuery = [
-    "코드", "코딩", "에러", "오류", "버그", "python", "javascript",
-    "java", "c++", "html", "css", "flask", "api", "cmd", "powershell"
-  ].some(k => lowerQuery.includes(k));
-  const newsQuery = lowerQuery.includes("뉴스") || lowerQuery.includes("소식");
-  const personQuery = ["누구야", "누구예요", "누구에요", "누구인가", "누구지", "누구인지", "어떤 사람이야", "who is"]
-    .some(k => lowerQuery.includes(k));
-
-  const activityPlan = personQuery
-    ? [
-        "● 인물 이름과 동명이인 가능성을 확인하고 있습니다…",
-        "● 위키백과·나무위키·뉴스·YouTube·웹을 함께 검색하고 있습니다…",
-        "● 여러 출처를 대조해 답변을 정리하고 있습니다…"
-      ]
-    : newsQuery
-    ? [
-        "● 최신 뉴스 요청을 확인하고 있습니다…",
-        "● 뉴스 출처와 게시 시각을 확인하고 있습니다…",
-        "● 확인한 자료로 답변을 준비하고 있습니다…"
-      ]
-    : codingQuery
-      ? [
-          "● 코드 요청을 이해하고 있습니다…",
-          "● 코드 구조와 오류 가능성을 분석하고 있습니다…",
-          "● 실행 가능한 답변을 생성하고 있습니다…"
-        ]
-      : [
-          "● 질문을 이해하고 있습니다…",
-          "● 필요한 정보를 준비하고 있습니다…",
-          "● PICK이 답변을 생성하고 있습니다…"
-        ];
-
-  state.messages.push({
-    role: "assistant",
-    content: activityPlan[0],
-    __pickActivity: true
-  });
-  const assistantIndex = state.messages.length - 1;
-  let receivedFirstToken = false;
-  const activityTimers = [];
-
-  const setActivity = text => {
-    const message = state.messages[assistantIndex];
-    if (!message || receivedFirstToken || !message.__pickActivity) return;
-    message.content = text;
-    renderMessages(false);
-  };
-
-  activityTimers.push(setTimeout(() => setActivity(activityPlan[1]), 1800));
-  activityTimers.push(setTimeout(() => setActivity(activityPlan[2]), 4200));
-
-  const stopActivity = () => {
-    activityTimers.forEach(clearTimeout);
-    const message = state.messages[assistantIndex];
-    if (message) delete message.__pickActivity;
-  };
-
-  renderMessages();
-
-  if ($("messageInput")) {
-    $("messageInput").value = "";
-    autoGrow($("messageInput"));
-  }
-
-  try {
-    state.abortController = new AbortController();
-    const gps = await getGpsForWeather(clean);
-
-    const response = await fetch(`/api/chat/${state.currentChatId}/stream`, {
-      method: "POST",
-      credentials: "same-origin",
-      signal: state.abortController.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRF-Token": csrfToken()
-      },
-      body: JSON.stringify({
-        message: clean,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Seoul",
-        ...gps
-      })
-    });
-
-    if (response.status === 401) {
-      location.href = "/login";
-      return;
-    }
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || `요청 실패 (${response.status})`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let buffer = "";
-
-    while (true) {
-      const {value, done} = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, {stream: true});
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const item = JSON.parse(line);
-        if (item.type === "token") {
-          if (!receivedFirstToken) {
-            receivedFirstToken = true;
-            stopActivity();
-            state.messages[assistantIndex].content = "";
-          }
-          state.messages[assistantIndex].content += item.text || "";
-          renderMessages(false);
-        } else if (item.type === "error") {
-          stopActivity();
-          state.messages[assistantIndex].content += item.text || "오류가 발생했습니다.";
-          renderMessages(false);
-        } else if (item.type === "meta") {
-          if (item.seasonal_mode) applySeasonalMode(item.seasonal_mode);
-          if (Array.isArray(item.sources)) {
-            state.messages[assistantIndex].sources = item.sources;
-          }
-          if (item.web_used) showToast("인터넷 자료를 확인했습니다.");
-          if (item.route?.primary === "coding") showToast("코딩 모드로 처리합니다.");
-          if (item.clarification) showToast("정확한 답변을 위해 확인이 필요합니다.");
-
-          if (!receivedFirstToken) {
-            if (item.web_kind === "person") {
-              setActivity("● 여러 인물 출처를 확인했습니다. 교차 검증해 답변을 작성하고 있습니다…");
-            } else if (item.route?.primary === "news" || item.web_kind === "news") {
-              setActivity("● 최신 뉴스 자료를 확인했습니다. 답변을 작성하고 있습니다…");
-            } else if (item.route?.primary === "coding") {
-              setActivity("● 코드 분석을 마쳤습니다. 답변 코드를 작성하고 있습니다…");
-            } else if (item.web_used) {
-              setActivity("● 인터넷 자료를 확인했습니다. 답변을 작성하고 있습니다…");
-            } else {
-              setActivity("● PICK이 답변을 생성하고 있습니다…");
-            }
-          }
-        }
-      }
-    }
-
-    // Keep the exact streamed answer on screen. Do not overwrite it with
-    // an older DB snapshot immediately after stream completion.
-    const currentAssistant = state.messages[assistantIndex];
-    if (currentAssistant && currentAssistant.content && !currentAssistant.__pickActivity) {
-      currentAssistant.__followUps = buildFollowUps(clean);
-    }
-
-    const boot = await api("/api/bootstrap");
-    state.chats = boot.chats || state.chats;
-    renderChatList();
-    renderMessages();
-  } catch (e) {
-    if (e?.name === "AbortError") {
-      stopActivity();
-      const msg = state.messages[assistantIndex];
-      if (msg && msg.__pickActivity) {
-        msg.content = "답변 생성을 중지했습니다.";
-        delete msg.__pickActivity;
-      } else if (msg && msg.content) {
-        msg.content += "\n\n[답변 생성이 중지되었습니다.]";
-      }
-      renderMessages();
-    } else {
-      state.messages[assistantIndex].content ||= `오류: ${e.message}`;
-      renderMessages();
-      showToast(e.message);
-    }
-  } finally {
-    stopActivity();
-    state.abortController = null;
-    state.sending = false;
-    updateSendButtons();
-    $("messageInput")?.focus();
-  }
-}
+async function sendTextStreaming(text){const clean=String(text||"").trim();if(!clean||state.sending)return;if(!state.currentChatId)await createChat();const chatId=Number(state.currentChatId);state.sending=true;updateSendButtons();if($("messageInput")){$("messageInput").value="";autoGrow($("messageInput"));}try{const gps=await getGpsForWeather(clean);const data=await api(`/api/chat/${chatId}/background`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:clean,timezone:getClientTimezone(),country:getClientCountry(),...gps})});state.messages=data.messages||state.messages;state.chats=data.chats||state.chats;if(data.job){mergeBackgroundJobs([data.job]);pollBackgroundJob(data.job.id,chatId);}renderChatList();renderMessages();showToast("질문을 저장했습니다. 이제 사이트를 나가도 답변 생성이 계속됩니다.");}catch(err){showToast(err.message);}finally{state.sending=false;state.abortController=null;updateSendButtons();$("messageInput")?.focus();}}
 
 async function sendFromHome() {
   const text = $("homeInput")?.value.trim();

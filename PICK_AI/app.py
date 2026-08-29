@@ -61,6 +61,13 @@ from inference_guard import guard, InferenceBusy, CircuitOpen
 from context_safety import wrap_untrusted_context
 from smart_queries import navigation_answer
 from postal_upgrade import postal_answer
+from background_jobs import (
+    JobCancelled, ensure_job_table,
+    enqueue_job as enqueue_background_job,
+    get_job_for_user, list_chat_jobs, has_active_job,
+    cancel_job as cancel_background_job,
+    start_worker as start_background_worker,
+)
 from people_research import is_person_query
 from translation_support import translation_instruction
 from office_generator import detect_office_kind, create_office_file
@@ -521,6 +528,71 @@ def update_chat_title(chat_id):
         )
         conn.commit()
     conn.close()
+
+
+def process_background_chat_job(job, update_partial, is_cancelled):
+    uid=int(job["user_id"]); chat_id=int(job["chat_id"]); payload=json.loads(job.get("request_json") or "{}")
+    text=str(payload.get("message") or "").strip()
+    if not text: raise RuntimeError("저장된 질문이 비어 있습니다.")
+    update_partial("질문을 서버에 저장했습니다. 답변 생성을 준비하고 있습니다…",meta={"phase":"preparing"})
+    direct=direct_realtime_or_identity_answer(text,payload)
+    if direct is not None:
+        if is_cancelled(): raise JobCancelled()
+        answer,kind=direct
+        return {"answer":answer,"stored_answer":answer,"sources":[],"model":"PICK-direct",
+                "meta":{"route":{"primary":kind},"web_used":kind in {"weather","news"},"web_kind":kind if kind in {"weather","news"} else None}}
+    history=get_messages(chat_id); recent=[{"role":m["role"],"content":m["content"]} for m in history[:-1][-16:]]
+    orch=orchestrate(text,recent); qa=analyze_question(text,recent); normalized=orch.rewritten_question or qa.normalized or text; route=orch.route
+    if orch.clarification:
+        a=orch.clarification
+        return {"answer":a,"stored_answer":a,"sources":[],"model":"clarification","meta":{"route":route,"clarification":True,"web_used":False,"web_kind":None}}
+    try: conv_summary=get_conversation_summary(uid,chat_id)
+    except Exception: conv_summary=""
+    settings=get_user_settings(uid); web_mode=settings.get("web_mode","auto"); web_context={}; web_text=""
+    if WEB_SEARCH_ENABLED and web_mode!="off" and (route.get("use_web") or web_mode=="always"):
+        update_partial("인터넷 자료와 출처를 확인하고 있습니다… 사이트를 나가도 계속됩니다.",meta={"phase":"web","route":route})
+        try:
+            q=text if is_person_query(text) else refine_search_query(qa,recent); web_context=web_search(q,mode="always"); web_text=format_web_search(web_context)
+        except Exception as e: log("WARNING",f"background web search: {e}")
+    if is_cancelled(): raise JobCancelled()
+    memory_text=format_memory_context_v2(uid,normalized); learning_text=format_training_examples(uid,normalized,limit=3); profile_text=format_profile_context(uid)
+    safe_web=wrap_untrusted_context("인터넷 검색 자료",web_text) if web_text else ""; combined="\n\n".join(x for x in [profile_text,memory_text,learning_text,safe_web] if x)
+    ext=build_system_extensions(uid,normalized)
+    seasonal=resolve_mode(uid,user_timezone=(payload.get("timezone") or "Asia/Seoul"),country=(str(payload.get("country") or "").upper() or None),override=settings.get("seasonal_override","auto"))
+    context="\n\n".join(x for x in [orch.understanding_instruction,("[Conversation summary]\n"+conv_summary) if conv_summary else "",seasonal.system_instruction if seasonal.active else "",ext,combined] if x)
+    lim=18000 if isinstance(web_context,dict) and web_context.get("kind") in {"news","person"} else 10000
+    if len(context)>lim: context=context[-lim:]
+    prompt=build_prompt(normalized,state={"summary":f"현재 채팅 ID {chat_id}"},history=recent,web_context=context)
+    sources=_sources_from_web_result(web_context); selected=choose_model(normalized,resolve_selected_model(uid))
+    meta={"route":route,"seasonal_mode":seasonal.to_dict(),"web_used":bool(web_context.get("used")) if isinstance(web_context,dict) else False,"web_kind":web_context.get("kind") if isinstance(web_context,dict) else None,"phase":"generating"}
+    update_partial("PICK이 답변을 생성하고 있습니다… 사이트를 닫아도 서버에서 계속 진행됩니다.",sources=sources,model=selected,meta=meta)
+    full=[]; had_error=False; last_model=selected; n=0
+    try:
+        with guard.slot():
+            for item in stream_generate(prompt,model=selected):
+                if is_cancelled(): raise JobCancelled()
+                if item.get("type")=="token":
+                    chunk=str(item.get("text") or "")
+                    if chunk:
+                        full.append(chunk); n+=1; last_model=str(item.get("model") or last_model)
+                        if n%4==0: update_partial("".join(full),sources=sources,model=last_model,meta=meta)
+                elif item.get("type")=="error":
+                    had_error=True
+                    if not full: raise RuntimeError(str(item.get("text") or "AI 생성 오류"))
+            guard.failure() if had_error else guard.success()
+    except (InferenceBusy,CircuitOpen) as e: raise RuntimeError(str(e)) from e
+    answer="".join(full).strip()
+    if not answer: raise RuntimeError("PICK이 빈 답변을 생성했습니다.")
+    val=validate_answer(answer,web_used=bool(web_context.get("used")) if isinstance(web_context,dict) else False,coding=bool(route.get("use_coding"))); answer=val.cleaned.strip()
+    if not answer: raise RuntimeError("답변 검증 후 내용이 비어 있습니다.")
+    stored=_attach_source_marker(answer,sources); update_partial(answer,sources=sources,model=last_model,meta={**meta,"phase":"finishing"})
+    return {"answer":answer,"stored_answer":stored,"sources":sources,"model":last_model,"meta":meta}
+
+def after_background_chat_job(job,result,message_id):
+    try: refresh_summary_if_needed(int(job["user_id"]),int(job["chat_id"]),get_messages(int(job["chat_id"])),summarizer=None)
+    except Exception as e: log("WARNING",f"background summary refresh: {e}")
+
+init_db(); ensure_job_table(); start_background_worker(process_background_chat_job,after_complete=after_background_chat_job)
 
 
 @app.errorhandler(403)
@@ -1322,6 +1394,48 @@ def api_chat_attachment(chat_id):
     })
 
 
+@app.post("/api/chat/<int:chat_id>/background")
+def api_chat_background(chat_id):
+    auth_err=require_login_json()
+    if auth_err:return auth_err
+    uid=session["user_id"]
+    if not assert_chat_owner(chat_id,uid): return jsonify({"ok":False,"error":"채팅을 찾을 수 없습니다."}),404
+    payload=request.get_json(silent=True) or {}; text=str(payload.get("message") or "").strip()
+    if not text:return jsonify({"ok":False,"error":"메시지를 입력해 주세요."}),400
+    if len(text)>12000:return jsonify({"ok":False,"error":"메시지가 너무 깁니다."}),400
+    if has_active_job(uid,chat_id): return jsonify({"ok":False,"error":"이 채팅의 이전 답변이 아직 백그라운드에서 생성 중입니다. 완료될 때까지 기다리거나 다른 채팅에서 질문해 주세요."}),409
+    if not limiter.allow(client_key(f"chat:{uid}"),RATE_LIMIT_CHAT_PER_MIN,60): return jsonify({"ok":False,"error":"메시지를 너무 빠르게 보내고 있습니다."}),429
+    c=connect(); cur=c.execute("INSERT INTO chat_messages(chat_id,role,content,created_at) VALUES(?,?,?,?)",(chat_id,"user",text,now())); mid=cur.lastrowid
+    c.execute("UPDATE chats SET updated_at=? WHERE id=?",(now(),chat_id)); c.commit(); c.close(); update_chat_title(chat_id)
+    try: maybe_auto_store(uid,chat_id,text)
+    except Exception as e: log("WARNING",f"background memory auto-store: {e}")
+    job=enqueue_background_job(uid,chat_id,mid,payload)
+    return jsonify({"ok":True,"accepted":True,"job":job,"messages":get_messages(chat_id),"chats":get_chats(uid)}),202
+
+@app.get("/api/jobs/<int:job_id>")
+def api_background_job_status(job_id):
+    auth_err=require_login_json()
+    if auth_err:return auth_err
+    job=get_job_for_user(session["user_id"],job_id)
+    if not job:return jsonify({"ok":False,"error":"작업을 찾을 수 없습니다."}),404
+    return jsonify({"ok":True,"job":job})
+
+@app.post("/api/jobs/<int:job_id>/cancel")
+def api_background_job_cancel(job_id):
+    auth_err=require_login_json()
+    if auth_err:return auth_err
+    job=cancel_background_job(session["user_id"],job_id)
+    if not job:return jsonify({"ok":False,"error":"작업을 찾을 수 없습니다."}),404
+    return jsonify({"ok":True,"job":job})
+
+@app.get("/api/chat/<int:chat_id>/jobs")
+def api_background_chat_jobs(chat_id):
+    auth_err=require_login_json()
+    if auth_err:return auth_err
+    uid=session["user_id"]
+    if not assert_chat_owner(chat_id,uid):return jsonify({"ok":False,"error":"채팅을 찾을 수 없습니다."}),404
+    return jsonify({"ok":True,"jobs":list_chat_jobs(uid,chat_id,active_only=True)})
+
 @app.post("/api/chat/<int:chat_id>/stream")
 def api_chat_stream(chat_id):
     auth_err = require_login_json()
@@ -1557,9 +1671,10 @@ def api_chat_get(chat_id):
     auth_err = require_login_json()
     if auth_err:
         return auth_err
-    if not user_owns_chat(chat_id, session["user_id"]):
+    uid = session["user_id"]
+    if not user_owns_chat(chat_id, uid):
         return jsonify({"ok": False, "error": "채팅을 찾을 수 없습니다."}), 404
-    return jsonify({"ok": True, "messages": get_messages(chat_id)})
+    return jsonify({"ok": True, "messages": get_messages(chat_id), "jobs": list_chat_jobs(uid, chat_id, active_only=True)})
 
 
 @app.post("/api/chat/<int:chat_id>/rename")
