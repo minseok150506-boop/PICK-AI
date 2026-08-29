@@ -67,6 +67,7 @@ def should_search(text: str) -> bool:
         "알아봐", "확인해", "뉴스", "날씨", "기온", "유튜브", "youtube",
         "가격", "판매", "재고", "출시", "버전", "업데이트", "일정", "시간",
         "이번주", "이번 주", "내일", "어제", "이번달", "이번 달", "링크",
+        "우편번호", "주소", "길찾기", "네비", "내비", "경로", "몇 분", "몇분",
     ]
     return any(k in t for k in keywords)
 
@@ -98,7 +99,7 @@ def search_duckduckgo(query: str, limit: int = 6) -> list[dict[str, str]]:
                 "title": title,
                 "url": href,
                 "snippet": snippet,
-                "provider": "DuckDuckGo",
+                "provider": "PICK Search",
             })
         if len(out) >= limit:
             break
@@ -187,6 +188,15 @@ def search_youtube(query: str, limit: int = 5) -> list[dict[str, str]]:
     return out
 
 
+def _wind_direction_name(degrees):
+    try:
+        deg = float(degrees) % 360
+    except Exception:
+        return ""
+    names = ["북풍", "북동풍", "동풍", "남동풍", "남풍", "남서풍", "서풍", "북서풍"]
+    return names[int((deg + 22.5) // 45) % 8]
+
+
 def _cache_get_weather(key: str):
     row = _WEATHER_CACHE.get(key)
     if not row:
@@ -255,6 +265,8 @@ def _wttr_weather(location: str) -> dict[str, Any]:
         "apparent_c": num(current.get("FeelsLikeC")),
         "precipitation_mm": num(current.get("precipMM")),
         "wind_kmh": num(current.get("windspeedKmph")),
+        "wind_direction_deg": num(current.get("winddirDegree")),
+        "wind_direction_name": str(current.get("winddir16Point") or "").strip() or _wind_direction_name(current.get("winddirDegree")),
         "today_high_c": highs[0] if highs else None,
         "today_low_c": lows[0] if lows else None,
         "precip_probability": rains[0] if rains else None,
@@ -272,7 +284,7 @@ def _open_meteo_weather_from_coords(lat: float, lon: float, location_name: str) 
     data = _json(
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={lat:.6f}&longitude={lon:.6f}"
-        "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m"
+        "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code"
         "&timezone=auto&forecast_days=7",
         timeout=8,
@@ -289,6 +301,8 @@ def _open_meteo_weather_from_coords(lat: float, lon: float, location_name: str) 
         "rain_mm": cur.get("rain"),
         "weather_code": cur.get("weather_code"),
         "wind_kmh": cur.get("wind_speed_10m"),
+        "wind_direction_deg": cur.get("wind_direction_10m"),
+        "wind_direction_name": _wind_direction_name(cur.get("wind_direction_10m")),
         "today_high_c": (daily.get("temperature_2m_max") or [None])[0],
         "today_low_c": (daily.get("temperature_2m_min") or [None])[0],
         "precip_probability": (daily.get("precipitation_probability_max") or [None])[0],

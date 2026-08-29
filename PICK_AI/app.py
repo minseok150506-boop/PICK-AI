@@ -13,7 +13,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from analyzers import analyze_document_upload, analyze_image_upload, analyze_video_upload
+from analyzers import analyze_document_upload, analyze_image_upload, analyze_video_upload, translate_image_upload
 from config import (
     DATA_DIR, STORAGE_DIR,
     WEB_SEARCH_ENABLED, RATE_LIMIT_CHAT_PER_MIN, RATE_LIMIT_LOGIN_PER_10MIN,
@@ -58,6 +58,9 @@ from country_resolver import resolve_country
 from google_auth import configure_google, google_enabled, oauth
 from inference_guard import guard, InferenceBusy, CircuitOpen
 from context_safety import wrap_untrusted_context
+from smart_queries import postal_answer, navigation_answer
+from translation_support import translation_instruction
+from office_generator import detect_office_kind, create_office_file
 from admin_roles import (
     is_admin as role_is_admin,
     is_owner as role_is_owner,
@@ -216,7 +219,8 @@ def get_preferred_language(user_id):
 def build_system_extensions(user_id, text):
     lang = language_instruction(get_preferred_language(user_id), text)
     code = coding_instruction(text)
-    return "\n\n".join(x for x in [lang, code] if x)
+    translation = translation_instruction(text)
+    return "\n\n".join(x for x in [lang, code, translation] if x)
 
 def direct_realtime_or_identity_answer(text, payload=None):
     raw = str(text or "").strip()
@@ -230,12 +234,32 @@ def direct_realtime_or_identity_answer(text, payload=None):
     if ("pick" in lowered or "픽" in raw) and any(p in raw for p in identity_phrases):
         return "PICK은 김민석이 만든 AI 서비스입니다. 네이버에서 만든 서비스가 아닙니다.", "identity"
 
-    if any(word in raw for word in ("날씨", "기온", "온도")):
+    postal = postal_answer(raw)
+    if postal is not None:
+        return postal, "postal"
+
+    navigation = navigation_answer(raw, payload)
+    if navigation is not None:
+        return navigation, "navigation"
+
+    office_kind = detect_office_kind(raw)
+    if office_kind:
+        try:
+            created = create_office_file(raw, office_kind)
+            return (
+                f"{created['label']} 파일을 만들었습니다.\n"
+                f"[파일 다운로드]({created['url']})",
+                "file",
+            )
+        except Exception as exc:
+            return f"파일을 만드는 중 오류가 발생했습니다. ({exc})", "file"
+
+    if any(word in raw for word in ("날씨", "기온", "온도", "바람", "풍향", "풍양", "풍량", "풍속")):
         try:
             latitude = payload.get("latitude")
             longitude = payload.get("longitude")
             location_words = re.sub(
-                r"(오늘|내일|모레|이번\s*주|주간|현재|지금|실시간|날씨|기온|온도|예보|"
+                r"(오늘|내일|모레|이번\s*주|주간|현재\s*위치|내\s*위치|여기|현재|지금|실시간|날씨|기온|온도|예보|바람|풍향|풍양|풍량|풍속|"
                 r"알려\s*주세요|알려주세요|알려\s*줘|알려줘|어때요|어때)",
                 " ", raw
             )
@@ -309,7 +333,10 @@ def direct_realtime_or_identity_answer(text, payload=None):
                     f"{location_note} 기준 오늘 날씨입니다.\n"
                     f"현재 {w.get('temperature_c')}°C, 체감 {w.get('apparent_c')}°C입니다.\n"
                     f"오늘은{condition_text} 최고 {high}°C / 최저 {low}°C, 강수확률 {rain}%입니다.\n"
-                    f"현재 강수량 {w.get('precipitation_mm')}mm, 풍속 {w.get('wind_kmh')}km/h입니다.\n"
+                    f"현재 강수량 {w.get('precipitation_mm')}mm, 풍속 {w.get('wind_kmh')}km/h, "
+                    f"풍향 {w.get('wind_direction_name') or '-'}"
+                    + (f" ({w.get('wind_direction_deg')}°)" if w.get('wind_direction_deg') is not None else "")
+                    + "입니다.\n"
                     "출처: Open-Meteo"
                 )
             else:
@@ -1176,10 +1203,16 @@ def api_chat_attachment(chat_id):
         return jsonify({"ok": False, "error": "파일이 없습니다."}), 400
 
     suffix = Path(f.filename or "").suffix.lower()
+    attachment_mode = str(request.args.get("mode") or "analysis").strip().lower()
+    target_language = str(request.args.get("target_language") or "한국어").strip()[:50] or "한국어"
     try:
         if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
-            result = analyze_image_upload(f)
-            kind = "image"
+            if attachment_mode == "translate":
+                result = translate_image_upload(f, target_language=target_language)
+                kind = "image_translation"
+            else:
+                result = analyze_image_upload(f)
+                kind = "image"
         elif suffix in {".mp4", ".mov", ".mkv", ".avi", ".webm"}:
             result = analyze_video_upload(f)
             kind = "video"
@@ -1352,6 +1385,7 @@ def api_chat_stream(chat_id):
         uid,
         user_timezone=(payload.get("timezone") or "Asia/Seoul"),
         country=(str(payload.get("country") or "").upper() or None),
+        override=settings.get("seasonal_override", "auto"),
     )
     seasonal_instruction = seasonal_mode.system_instruction if seasonal_mode.active else ""
     extended_context = "\n\n".join(
@@ -1524,6 +1558,7 @@ def api_chat_send(chat_id):
     question_analysis = analyze_question(text, history_for_llm)
     normalized_text = orchestration.rewritten_question or question_analysis.normalized or text
     understanding_text = orchestration.understanding_instruction
+    settings = get_user_settings(uid)
 
     web_context = {}
     web_context_text = ""
@@ -1539,10 +1574,11 @@ def api_chat_send(chat_id):
     try:
         system_extensions = build_system_extensions(uid, normalized_text)
         seasonal_mode = resolve_mode(
-        uid,
-        user_timezone=(payload.get("timezone") or "Asia/Seoul"),
-        country=(str(payload.get("country") or "").upper() or None),
-    )
+            uid,
+            user_timezone=(request.form.get("timezone") or "Asia/Seoul"),
+            country=(str(request.form.get("country") or "").upper() or None),
+            override=settings.get("seasonal_override", "auto"),
+        )
         seasonal_instruction = seasonal_mode.system_instruction if seasonal_mode.active else ""
         answer = llm.generate(
             normalized_text,
@@ -1589,6 +1625,10 @@ def api_analyze_image():
     if not f:
         return jsonify({"ok": False, "error": "이미지 파일이 없습니다."}), 400
     try:
+        mode = str(request.args.get("mode") or "analysis").strip().lower()
+        target_language = str(request.args.get("target_language") or "한국어").strip()[:50] or "한국어"
+        if mode == "translate":
+            return jsonify({"ok": True, "result": translate_image_upload(f, target_language=target_language)})
         return jsonify({"ok": True, "result": analyze_image_upload(f)})
     except Exception as exc:
         log("ERROR", f"image analysis: {exc}")

@@ -110,10 +110,11 @@ MODES = {
         "celebration_message": "화면에 작은 장난이 숨어 있을 수 있습니다. 답변의 사실성은 그대로입니다.",
         "decoration": "sparkles",
         "instruction": """[April Fools mode]
-- Light, harmless humor is allowed.
-- Never fabricate facts, warnings, purchases, emergencies, prices, weather, news, code results, or user data.
-- Factual answers must remain accurate.
-- Jokes must be recognizable as jokes or immediately clarified.
+- Make the April Fools event clearly noticeable in ordinary low-stakes conversation with playful wording, a tiny harmless joke, or a fitting emoji.
+- A joke must be obviously playful or immediately followed by a clear correction such as '농담입니다'.
+- Never fabricate facts, warnings, purchases, emergencies, prices, weather, navigation, postal codes, news, code results, translations, or user data.
+- Serious, safety-related, factual, technical, legal, medical, weather, navigation, postal, news, coding, and translation requests must remain precise.
+- Factual accuracy always wins over the event theme.
 """,
     },
 
@@ -312,6 +313,15 @@ def resolve_mode(
         mode_id, timezone_name, country_info = automatic_mode_id(user_timezone, country)
     data = MODES[mode_id]
 
+    active_instruction = data["instruction"]
+    if mode_id != "none":
+        active_instruction += f"""
+[Active PICK event: {data['name']}]
+- This event mode is active now. In ordinary low-stakes conversation, make the event feel visibly active with one short themed phrase, emoji, or stylistic touch when appropriate.
+- Do not force the event theme into serious, urgent, factual, coding, translation, postal, navigation, weather, or news answers.
+- Never change facts or user-requested output just to fit the event.
+"""
+
     return SeasonalMode(
         id=mode_id,
         name=data["name"],
@@ -332,7 +342,7 @@ def resolve_mode(
             300,
             max(30, seconds_until_next_local_midnight(timezone_name))
         ),
-        system_instruction=data["instruction"],
+        system_instruction=active_instruction,
     )
 
 

@@ -33,6 +33,12 @@ COMMON_KO_FIXES = {
     "모레날씨": "모레 날씨",
     "날씨알려줘": "날씨 알려줘",
     "계속해줘": "계속 해줘",
+    "풍양": "풍향",
+    "바람방향": "바람 방향",
+    "네비게이션": "내비게이션",
+    "프라이전체이션": "프레젠테이션",
+    "프리젠테이션": "프레젠테이션",
+    "우편 번호": "우편번호",
 }
 
 REFERENCE_WORDS = [
@@ -83,6 +89,10 @@ def normalize_question(text: str) -> str:
             value = re.sub(re.escape(wrong), right, value, flags=re.I)
             lowered = value.lower()
 
+    # In weather/wind context, users often type 풍량 when they mean 풍향 (wind direction).
+    if "풍량" in value and any(k in value for k in ("바람", "날씨", "방향", "몇 도")):
+        value = value.replace("풍량", "풍향")
+
     # Normalize repeated punctuation/spacing without altering code-like content.
     value = re.sub(r"[?]{2,}", "?", value)
     value = re.sub(r"[!]{2,}", "!", value)
@@ -115,6 +125,14 @@ def extract_key_terms(text: str) -> list[str]:
 
 def classify_intent(text: str) -> str:
     t = text.lower()
+
+    if any(x in t for x in ["우편번호", "zipcode", "zip code", "postal code"]):
+        return "postal"
+    if any(x in t for x in ["네비", "내비", "내비게이션", "길찾기", "이동 시간", "도착 시간"]) or ("까지" in t and any(x in t for x in ["몇 분", "몇분", "차로", "도보", "걸어서", "자전거"])):
+        return "navigation"
+    if any(x in t for x in ["ppt", "pptx", "파워포인트", "프레젠테이션", "엑셀", "xlsx", "워드", "docx"]):
+        if any(x in t for x in ["만들", "생성", "작성", "제작", "파일로"]):
+            return "office_file"
 
     if is_coding_query(text):
         if any(x in t for x in ERROR_HINTS):
@@ -192,7 +210,7 @@ def analyze_question(text: str, history: list[dict] | None = None) -> QuestionAn
         ambiguity = 0
 
     detected_intent = classify_intent(normalized)
-    if detected_intent in {"weather", "time", "news", "coding", "write_code", "debug_code", "translate", "summarize"}:
+    if detected_intent in {"weather", "time", "news", "coding", "write_code", "debug_code", "translate", "summarize", "postal", "navigation", "office_file"}:
         ambiguity = max(0, ambiguity - 2)
 
     should_clarify = ambiguity >= 3

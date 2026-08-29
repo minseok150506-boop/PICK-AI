@@ -68,7 +68,7 @@ def analyze_image_upload(file_storage):
         try:
             description = vision_analyze(
                 [path],
-                "이 이미지를 한국어로 자세히 분석해 주세요. 보이는 객체, 장면, 글자, 특징을 정리하고 확실하지 않은 것은 추측이라고 표시해 주세요."
+                "이 이미지를 한국어로 자세히 분석해 주세요. 보이는 객체와 장면을 설명하고, 이미지 속 글자는 가능한 한 원문 그대로 정확히 옮겨 적으세요. 판독이 어려운 글자는 추측하지 말고 판독 불가라고 표시해 주세요."
             )
             base["analysis"] = description
             base["vision_model_used"] = True
@@ -77,6 +77,35 @@ def analyze_image_upload(file_storage):
                 "비전 모델 분석을 실행하지 못했습니다. "
                 "PICK_VISION_MODEL(기본 llava:latest)이 미니PC Ollama에 설치되어 있는지 확인해 주세요."
             )
+            base["vision_model_used"] = False
+            base["vision_error"] = str(exc)
+        return base
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def translate_image_upload(file_storage, target_language="한국어"):
+    path, original = _safe_upload(file_storage, ALLOWED_IMAGE_EXT)
+    try:
+        base = {"filename": original, "size_bytes": path.stat().st_size, "target_language": target_language}
+        if Image:
+            with Image.open(path) as img:
+                base.update({"width": img.width, "height": img.height, "format": img.format, "mode": img.mode})
+        prompt = f"""이 이미지에 보이는 글자를 가능한 한 정확히 읽고 {target_language}로 번역해 주세요.
+규칙:
+1. 먼저 [원문] 아래에 보이는 글자를 줄 순서대로 최대한 정확히 옮기세요.
+2. 그 다음 [번역] 아래에 같은 순서로 {target_language} 번역을 적으세요.
+3. 읽을 수 없는 부분은 추측하지 말고 [판독 불가]라고 표시하세요.
+4. 숫자, 날짜, 단위, 고유명사, URL, 코드, 제품명은 함부로 바꾸지 마세요.
+5. 표/메뉴/버튼이면 원래 구조가 이해되도록 항목 순서를 유지하세요.
+6. 설명보다 원문과 번역 결과를 우선하세요.
+"""
+        try:
+            base["analysis"] = vision_analyze([path], prompt)
+            base["vision_model_used"] = True
+            base["translation"] = True
+        except Exception as exc:
+            base["analysis"] = "이미지 번역을 실행하지 못했습니다. PICK 비전 모델 상태를 확인해 주세요."
             base["vision_model_used"] = False
             base["vision_error"] = str(exc)
         return base

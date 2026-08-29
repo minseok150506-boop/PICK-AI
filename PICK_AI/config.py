@@ -34,7 +34,7 @@ OLLAMA_FALLBACK_MODELS = [
         "qwen3:8b,qwen3:4b,llama3:latest"
     ).split(",") if x.strip()
 ]
-VISION_MODEL = os.environ.get("PICK_VISION_MODEL", "llava:latest")
+VISION_MODEL = os.environ.get("PICK_VISION_MODEL", "qwen2.5vl:7b")
 
 MAX_UPLOAD_MB = int(os.environ.get("PICK_MAX_UPLOAD_MB", "150"))
 MAX_CONTENT_LENGTH = MAX_UPLOAD_MB * 1024 * 1024

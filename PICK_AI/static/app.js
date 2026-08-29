@@ -322,12 +322,18 @@ function stopCurrentResponse() {
 
 function weatherQuery(text) {
   const t = String(text || "").toLowerCase();
-  return ["날씨", "기온", "온도"].some(k => t.includes(k));
+  return ["날씨", "기온", "온도", "바람", "풍향", "풍양", "풍량", "풍속"].some(k => t.includes(k));
+}
+
+function navigationQuery(text) {
+  const t = String(text || "").toLowerCase();
+  const navWord = ["네비", "내비", "내비게이션", "길찾기", "차로", "자동차로", "도보", "걸어서", "자전거", "몇 분", "몇분", "얼마나 걸"].some(k => t.includes(k));
+  return navWord && (t.includes("까지") || t.includes("에서") || t.includes("네비") || t.includes("내비") || t.includes("길찾기"));
 }
 
 function getGpsForWeather(text) {
   return new Promise(resolve => {
-    if (!weatherQuery(text)) {
+    if (!weatherQuery(text) && !navigationQuery(text)) {
       resolve({});
       return;
     }
@@ -728,14 +734,17 @@ async function runManualWebSearch() {
   }
 }
 
-async function uploadAttachment(file) {
+async function uploadAttachment(file, mode="analysis", targetLanguage="") {
   if (!file) return;
   if (!state.currentChatId) await createChat();
   setScreen("chatScreen");
   try {
     const form = new FormData();
     form.append("file", file);
-    const data = await api(`/api/chat/${state.currentChatId}/attachment`, {
+    const query = mode === "translate"
+      ? `?mode=translate&target_language=${encodeURIComponent(targetLanguage || "한국어")}`
+      : "";
+    const data = await api(`/api/chat/${state.currentChatId}/attachment${query}`, {
       method: "POST",
       body: form
     });
@@ -743,7 +752,7 @@ async function uploadAttachment(file) {
     state.chats = data.chats || state.chats;
     renderChatList();
     renderMessages();
-    showToast("파일 분석이 완료되었습니다.");
+    showToast(mode === "translate" ? "이미지 번역이 완료되었습니다." : "파일 분석이 완료되었습니다.");
   } catch (e) {
     showToast(e.message);
   }
@@ -1309,6 +1318,13 @@ document.addEventListener("click", async event => {
   const fileTool = event.target.closest("[data-tool]");
   if (fileTool) {
     $("toolsMenu")?.classList.add("hidden");
+    window.__pickFileToolMode = fileTool.dataset.tool || "file";
+    window.__pickTranslateTarget = "";
+    if (window.__pickFileToolMode === "image-translate") {
+      const target = window.prompt("번역할 언어를 입력하세요.", "한국어");
+      if (target === null) return;
+      window.__pickTranslateTarget = target.trim() || "한국어";
+    }
     $("filePicker")?.click();
     return;
   }
@@ -1381,7 +1397,12 @@ $("manualSearchInput")?.addEventListener("keydown", e => {
 $("filePicker")?.addEventListener("change", e => {
   const file = e.target.files?.[0];
   e.target.value = "";
-  if (file) uploadAttachment(file);
+  if (!file) return;
+  const mode = window.__pickFileToolMode === "image-translate" ? "translate" : "analysis";
+  const target = window.__pickTranslateTarget || "한국어";
+  window.__pickFileToolMode = "file";
+  window.__pickTranslateTarget = "";
+  uploadAttachment(file, mode, target);
 });
 
 document.addEventListener("paste", e => {
