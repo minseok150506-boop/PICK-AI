@@ -59,7 +59,8 @@ from country_resolver import resolve_country
 from google_auth import configure_google, google_enabled, oauth
 from inference_guard import guard, InferenceBusy, CircuitOpen
 from context_safety import wrap_untrusted_context
-from smart_queries import postal_answer, navigation_answer
+from smart_queries import navigation_answer
+from postal_upgrade import postal_answer
 from people_research import is_person_query
 from translation_support import translation_instruction
 from office_generator import detect_office_kind, create_office_file

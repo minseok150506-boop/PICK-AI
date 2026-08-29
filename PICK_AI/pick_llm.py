@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 
 from config import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_FALLBACK_MODELS, VISION_MODEL
+from model_council import should_use_council_prompt, generate_consensus
 
 
 class OllamaError(RuntimeError):
@@ -148,6 +149,14 @@ PICK:"""
         news_mode = "[PICK NEWS DETAIL MODE]" in prompt
         person_mode = "[PICK PERSON RESEARCH MODE]" in prompt
         coding_mode = "[Coding mode]" in prompt
+        if should_use_council_prompt(prompt):
+            try:
+                council_result = generate_consensus(prompt)
+                if council_result and council_result.get("answer"):
+                    return str(council_result["answer"]).strip()
+            except Exception:
+                pass
+
         last_error = None
         available = None
         try:
@@ -226,6 +235,19 @@ def stream_generate(prompt, model=None, timeout=300):
 
     if not prompt.lstrip().startswith("/no_think"):
         prompt = "/no_think\n" + prompt
+
+    if should_use_council_prompt(prompt):
+        try:
+            council_result = generate_consensus(prompt)
+            council_answer = str((council_result or {}).get("answer") or "").strip()
+            if council_answer:
+                step = 64
+                for i in range(0, len(council_answer), step):
+                    yield {"type": "token", "text": council_answer[i:i + step], "model": "PICK-Council"}
+                yield {"type": "done", "model": "PICK-Council", "contributors": (council_result or {}).get("contributors", [])}
+                return
+        except Exception:
+            pass
 
     for selected in candidates:
         payload = {
