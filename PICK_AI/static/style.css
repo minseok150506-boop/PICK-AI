@@ -655,3 +655,101 @@ button, a, input, textarea, select {
 .follow-up-questions button:hover {
   background: rgba(255,255,255,.10);
 }
+
+
+/* PICK_SOURCE_CARDS_V8 */
+.pick-sources {
+  position: relative;
+  width: fit-content;
+  max-width: min(100%, 620px);
+  margin-top: 10px;
+  z-index: 4;
+}
+.pick-sources > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 4px 10px 4px 6px;
+  border: 1px solid rgba(127,127,127,.24);
+  border-radius: 999px;
+  background: rgba(127,127,127,.08);
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.pick-sources > summary::-webkit-details-marker { display: none; }
+.pick-source-stack { display: inline-flex; align-items: center; padding-left: 3px; }
+.pick-source-mini {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-left: -3px;
+  border-radius: 50%;
+  border: 1px solid rgba(127,127,127,.35);
+  background: var(--panel, #222);
+  font-size: 10px;
+  font-weight: 700;
+}
+.pick-source-chevron { transition: transform .15s ease; opacity: .7; }
+.pick-sources[open] .pick-source-chevron { transform: rotate(180deg); }
+.pick-sources-panel {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 7px);
+  width: min(430px, calc(100vw - 32px));
+  max-height: min(430px, 60vh);
+  overflow: auto;
+  padding: 7px;
+  border: 1px solid rgba(127,127,127,.28);
+  border-radius: 14px;
+  background: var(--panel, #202020);
+  box-shadow: 0 14px 45px rgba(0,0,0,.28);
+}
+.pick-source-item {
+  display: grid;
+  grid-template-columns: 26px minmax(0,1fr) 18px;
+  gap: 8px;
+  align-items: start;
+  padding: 9px;
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+}
+.pick-source-item:hover { background: rgba(127,127,127,.12); }
+.pick-source-number {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: rgba(127,127,127,.14);
+  font-size: 11px;
+  font-weight: 700;
+}
+.pick-source-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pick-source-info strong { font-size: 12px; }
+.pick-source-info > span,
+.pick-source-info small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: .72;
+  font-size: 11px;
+}
+.pick-source-open { opacity: .6; font-size: 13px; }
+@media (max-width: 700px) {
+  .pick-sources { position: static; max-width: 100%; }
+  .pick-sources-panel {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-height: 55vh;
+    z-index: 1000;
+  }
+}

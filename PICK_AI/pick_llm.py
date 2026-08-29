@@ -146,6 +146,7 @@ PICK:"""
     def generate(self, text, state=None, history=None, web_context=''):
         prompt = self._prompt(text, state, history, web_context)
         news_mode = "[PICK NEWS DETAIL MODE]" in prompt
+        person_mode = "[PICK PERSON RESEARCH MODE]" in prompt
         coding_mode = "[Coding mode]" in prompt
         last_error = None
         available = None
@@ -165,10 +166,10 @@ PICK:"""
                     "keep_alive": "30m",
                     "think": False,
                     "options": {
-                        "temperature": 0.14 if coding_mode else (0.24 if news_mode else 0.40),
-                        "top_p": 0.88 if coding_mode else (0.90 if news_mode else 0.92),
-                        "num_ctx": 12288 if (coding_mode or news_mode) else 6144,
-                        "num_predict": 1800 if coding_mode else (1200 if news_mode else 760),
+                        "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.40)),
+                        "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
+                        "num_ctx": 12288 if (coding_mode or news_mode or person_mode) else 6144,
+                        "num_predict": 1800 if coding_mode else (1300 if person_mode else (1200 if news_mode else 760)),
                     }
                 }, timeout=self.timeout)
                 answer = str(data.get("response") or "").strip()
@@ -221,6 +222,7 @@ def stream_generate(prompt, model=None, timeout=300):
     last_error = None
     coding_mode = "[Coding mode]" in prompt
     news_mode = "[PICK NEWS DETAIL MODE]" in prompt
+    person_mode = "[PICK PERSON RESEARCH MODE]" in prompt
 
     if not prompt.lstrip().startswith("/no_think"):
         prompt = "/no_think\n" + prompt
@@ -233,10 +235,10 @@ def stream_generate(prompt, model=None, timeout=300):
             "keep_alive": "30m",
             "think": False,
             "options": {
-                "temperature": 0.14 if coding_mode else (0.24 if news_mode else 0.38),
-                "top_p": 0.88 if coding_mode else (0.90 if news_mode else 0.92),
-                "num_ctx": 12288 if (coding_mode or news_mode) else 6144,
-                "num_predict": 1800 if coding_mode else (1200 if news_mode else 650),
+                "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.38)),
+                "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
+                "num_ctx": 12288 if (coding_mode or news_mode or person_mode) else 6144,
+                "num_predict": 1800 if coding_mode else (1300 if person_mode else (1200 if news_mode else 650)),
             },
         }
         req = urllib.request.Request(

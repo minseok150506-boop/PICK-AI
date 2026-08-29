@@ -11,6 +11,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any
 
+from people_research import is_person_query, extract_person_name, research_person
+
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PICK-AI/1.0"
 TIMEOUT = 7
 _WEATHER_CACHE_TTL = 600
@@ -67,6 +69,8 @@ def should_search(text: str) -> bool:
         "알아봐", "확인해", "뉴스", "날씨", "기온", "유튜브", "youtube",
         "가격", "판매", "재고", "출시", "버전", "업데이트", "일정", "시간",
         "이번주", "이번 주", "내일", "어제", "이번달", "이번 달", "링크",
+        "누구야", "누구예요", "누구에요", "누구인가", "누구지", "누구인지",
+        "어떤 사람이야", "어떤 사람인가", "어떤 인물이야", "who is",
         "우편번호", "주소", "길찾기", "네비", "내비", "경로", "몇 분", "몇분",
     ]
     return any(k in t for k in keywords)
@@ -430,6 +434,22 @@ def search(query: str, mode: str = "auto") -> dict[str, Any]:
     lowered = text.lower()
 
     try:
+        if is_person_query(text):
+            person = research_person(
+                text,
+                search_web=search_duckduckgo,
+                search_wikipedia=search_wikipedia,
+                search_news=search_news,
+                search_youtube=search_youtube,
+            )
+            result["kind"] = "person"
+            result["person_name"] = person.get("person_name", "")
+            result["results"] = person.get("results") or []
+            result["source_counts"] = person.get("source_counts") or {}
+            if person.get("warning"):
+                result["warning"] = person["warning"]
+            return result
+
         if "날씨" in lowered or "기온" in lowered or "온도" in lowered:
             result["kind"] = "weather"
             result["weather"] = weather(_extract_weather_location(text))
@@ -481,6 +501,46 @@ def format_for_llm(result: dict[str, Any]) -> str:
             f"출처: {w.get('source_url')}\n"
             f"조회시각: {result.get('retrieved_at')}"
         )
+
+    if result.get("kind") == "person":
+        rows = result.get("results") or []
+        person_name = result.get("person_name") or result.get("query") or "해당 인물"
+        if not rows:
+            return (
+                "[PICK PERSON RESEARCH MODE]\n"
+                f"{person_name}에 대해 공개 인터넷 자료를 조사했지만 충분한 근거를 찾지 못했습니다. "
+                "동명이인을 임의로 합치거나 사실을 만들어내지 마세요."
+            )
+
+        lines = [
+            "[PICK PERSON RESEARCH MODE]",
+            f"[조사 대상] {person_name}",
+            "[답변 규칙]",
+            "- 여러 출처를 서로 대조해 인물이 누구인지 먼저 간단히 설명하세요.",
+            "- 직업/소속/주요 활동/대표 이력/현재 알려진 근황 순으로 유용하게 정리하세요.",
+            "- 최신 근황은 게시시각이 있는 뉴스 자료를 우선하세요.",
+            "- 동명이인이 섞일 가능성이 있으면 출처 간 일치 여부를 확인하고 불확실성을 분명히 밝히세요.",
+            "- Wikipedia는 백과사전 참고자료, 나무위키는 커뮤니티성 참고자료로 취급하고 단독 근거로 중요한 사실을 확정하지 마세요.",
+            "- YouTube는 공식 채널/인터뷰 여부를 구분하고 영상 제목만으로 사실을 과장하지 마세요.",
+            "- 주소, 전화번호, 개인 연락처, 정확한 사적 위치 같은 민감한 개인정보는 수집하거나 제공하지 마세요.",
+            "- 제공된 자료 밖의 생년월일, 경력, 소속, 사건을 만들어내지 마세요.",
+            "- 본문에서 근거를 연결할 때 가능하면 [1], [2]처럼 아래 출처 번호를 사용하세요.",
+            "- 긴 URL 목록은 본문 끝에 반복하지 마세요. PICK 화면이 출처를 별도 묶음으로 표시합니다.",
+            "",
+            "[수집된 공개 자료]",
+        ]
+        for i, row in enumerate(rows[:18], 1):
+            lines.extend([
+                f"[{i}] {row.get('title','')}",
+                f"종류: {row.get('source_type','web')}",
+                f"출처: {row.get('provider','Web')}",
+                f"게시시각: {row.get('published_at','')}",
+                f"URL: {row.get('url','')}",
+                f"내용: {row.get('snippet','')}",
+                "",
+            ])
+        lines.append(f"조회시각: {result.get('retrieved_at')}")
+        return "\n".join(lines)
 
     if result.get("kind") == "news":
         rows = result.get("results") or []

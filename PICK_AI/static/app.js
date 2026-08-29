@@ -211,6 +211,65 @@ function markdown(text) {
   return html;
 }
 
+function safeSourceUrl(value) {
+  const url = String(value || "").trim();
+  return /^https?:\/\//i.test(url) ? url : "";
+}
+
+function sourceIconLabel(source) {
+  const kind = String(source?.source_type || "").toLowerCase();
+  if (kind === "wikipedia") return "W";
+  if (kind === "namuwiki") return "N";
+  if (kind === "youtube") return "▶";
+  if (kind === "news") return "N";
+  if (kind === "weather") return "☁";
+  try {
+    const host = new URL(source.url).hostname.replace(/^www\./, "");
+    return (host[0] || "S").toUpperCase();
+  } catch (_) {
+    return "S";
+  }
+}
+
+function renderSourceBundle(sources) {
+  const rows = Array.isArray(sources)
+    ? sources.filter(s => safeSourceUrl(s?.url)).slice(0, 18)
+    : [];
+  if (!rows.length) return "";
+
+  const icons = rows.slice(0, 4).map(s =>
+    `<span class="pick-source-mini">${escapeHtml(sourceIconLabel(s))}</span>`
+  ).join("");
+
+  return `
+    <details class="pick-sources">
+      <summary>
+        <span class="pick-source-stack">${icons}</span>
+        <span>출처 ${rows.length}개</span>
+        <span class="pick-source-chevron">⌄</span>
+      </summary>
+      <div class="pick-sources-panel">
+        ${rows.map((s, i) => {
+          const url = safeSourceUrl(s.url);
+          const provider = s.provider || "PICK Search";
+          const title = s.title || url;
+          const published = s.published_at
+            ? `<small>${escapeHtml(s.published_at)}</small>`
+            : "";
+          return `<a class="pick-source-item" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">
+            <span class="pick-source-number">${i + 1}</span>
+            <span class="pick-source-info">
+              <strong>${escapeHtml(provider)}</strong>
+              <span>${escapeHtml(title)}</span>
+              ${published}
+            </span>
+            <span class="pick-source-open">↗</span>
+          </a>`;
+        }).join("")}
+      </div>
+    </details>`;
+}
+
 function renderMessages(scroll = true) {
   const box = $("messageArea");
   if (!box) return;
@@ -226,6 +285,7 @@ function renderMessages(scroll = true) {
         ${assistant ? '<div class="assistant-avatar">P</div>' : ""}
         <div class="message-body">
           <div class="message-content">${assistant ? markdown(m.content) : escapeHtml(m.content)}</div>
+          ${assistant ? renderSourceBundle(m.sources) : ""}
           ${assistant ? `
           <div class="message-actions">
             <button type="button" data-copy-message="${index}">복사</button>
@@ -391,8 +451,16 @@ async function sendTextStreaming(text) {
     "java", "c++", "html", "css", "flask", "api", "cmd", "powershell"
   ].some(k => lowerQuery.includes(k));
   const newsQuery = lowerQuery.includes("뉴스") || lowerQuery.includes("소식");
+  const personQuery = ["누구야", "누구예요", "누구에요", "누구인가", "누구지", "누구인지", "어떤 사람이야", "who is"]
+    .some(k => lowerQuery.includes(k));
 
-  const activityPlan = newsQuery
+  const activityPlan = personQuery
+    ? [
+        "● 인물 이름과 동명이인 가능성을 확인하고 있습니다…",
+        "● 위키백과·나무위키·뉴스·YouTube·웹을 함께 검색하고 있습니다…",
+        "● 여러 출처를 대조해 답변을 정리하고 있습니다…"
+      ]
+    : newsQuery
     ? [
         "● 최신 뉴스 요청을 확인하고 있습니다…",
         "● 뉴스 출처와 게시 시각을 확인하고 있습니다…",
@@ -497,12 +565,17 @@ async function sendTextStreaming(text) {
           renderMessages(false);
         } else if (item.type === "meta") {
           if (item.seasonal_mode) applySeasonalMode(item.seasonal_mode);
+          if (Array.isArray(item.sources)) {
+            state.messages[assistantIndex].sources = item.sources;
+          }
           if (item.web_used) showToast("인터넷 자료를 확인했습니다.");
           if (item.route?.primary === "coding") showToast("코딩 모드로 처리합니다.");
           if (item.clarification) showToast("정확한 답변을 위해 확인이 필요합니다.");
 
           if (!receivedFirstToken) {
-            if (item.route?.primary === "news" || item.web_kind === "news") {
+            if (item.web_kind === "person") {
+              setActivity("● 여러 인물 출처를 확인했습니다. 교차 검증해 답변을 작성하고 있습니다…");
+            } else if (item.route?.primary === "news" || item.web_kind === "news") {
               setActivity("● 최신 뉴스 자료를 확인했습니다. 답변을 작성하고 있습니다…");
             } else if (item.route?.primary === "coding") {
               setActivity("● 코드 분석을 마쳤습니다. 답변 코드를 작성하고 있습니다…");
@@ -1431,6 +1504,20 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/static/sw.js").catch(() => {});
   });
 }
+
+document.addEventListener("mouseover", event => {
+  if (!window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) return;
+  const details = event.target.closest(".pick-sources");
+  if (details) details.open = true;
+});
+
+document.addEventListener("mouseout", event => {
+  if (!window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches) return;
+  const details = event.target.closest(".pick-sources");
+  if (!details) return;
+  if (event.relatedTarget && details.contains(event.relatedTarget)) return;
+  details.open = false;
+});
 
 setInterval(refreshInferenceStatus, 5000);
 bootstrap();

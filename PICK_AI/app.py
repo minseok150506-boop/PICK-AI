@@ -1,4 +1,5 @@
 import os
+import base64
 import json
 import re
 import sqlite3
@@ -59,6 +60,7 @@ from google_auth import configure_google, google_enabled, oauth
 from inference_guard import guard, InferenceBusy, CircuitOpen
 from context_safety import wrap_untrusted_context
 from smart_queries import postal_answer, navigation_answer
+from people_research import is_person_query
 from translation_support import translation_instruction
 from office_generator import detect_office_kind, create_office_file
 from admin_roles import (
@@ -402,6 +404,74 @@ def get_chats(user_id):
     return [dict(r) for r in rows]
 
 
+_SOURCE_MARKER_RE = re.compile(
+    r"\n*\[\[PICK_SOURCES_B64:([A-Za-z0-9_-]+)\]\]\s*$"
+)
+
+
+def _clean_source_rows(rows):
+    out = []
+    seen = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        url = str(row.get("url") or row.get("source_url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            continue
+        key = url.split("#", 1)[0].rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "title": str(row.get("title") or row.get("location") or url).strip()[:300],
+            "url": url[:2000],
+            "provider": str(row.get("provider") or "PICK Search").strip()[:100],
+            "source_type": str(row.get("source_type") or "web").strip()[:40],
+            "published_at": str(row.get("published_at") or "").strip()[:100],
+        })
+        if len(out) >= 18:
+            break
+    return out
+
+
+def _sources_from_web_result(result):
+    if not isinstance(result, dict) or not result.get("used"):
+        return []
+    if result.get("kind") == "weather" and isinstance(result.get("weather"), dict):
+        weather = result["weather"]
+        return _clean_source_rows([{
+            "title": "날씨 데이터",
+            "url": weather.get("source_url"),
+            "provider": weather.get("provider") or "Open-Meteo",
+            "source_type": "weather",
+        }])
+    return _clean_source_rows(result.get("results") or [])
+
+
+def _attach_source_marker(answer, sources):
+    clean = _clean_source_rows(sources)
+    if not answer or not clean:
+        return answer
+    raw = json.dumps(clean, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return str(answer).rstrip() + f"\n\n[[PICK_SOURCES_B64:{encoded}]]"
+
+
+def _strip_source_marker(content):
+    value = str(content or "")
+    match = _SOURCE_MARKER_RE.search(value)
+    if not match:
+        return value, []
+    encoded = match.group(1)
+    try:
+        encoded += "=" * (-len(encoded) % 4)
+        rows = json.loads(base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8"))
+        sources = _clean_source_rows(rows if isinstance(rows, list) else [])
+    except Exception:
+        sources = []
+    return value[:match.start()].rstrip(), sources
+
+
 def get_messages(chat_id):
     conn = connect()
     rows = conn.execute(
@@ -414,6 +484,11 @@ def get_messages(chat_id):
         item = dict(row)
         if item["role"] == "bot":
             item["role"] = "assistant"
+        if item["role"] == "assistant":
+            clean_content, source_rows = _strip_source_marker(item.get("content"))
+            item["content"] = clean_content
+            if source_rows:
+                item["sources"] = source_rows
         result.append(item)
     return result
 
@@ -1369,7 +1444,7 @@ def api_chat_stream(chat_id):
     web_text = ""
     if WEB_SEARCH_ENABLED and web_mode != "off" and (route_plan.get("use_web") or web_mode == "always"):
         try:
-            search_query = refine_search_query(question_analysis, recent)
+            search_query = text if is_person_query(text) else refine_search_query(question_analysis, recent)
             web_context = web_search(search_query, mode="always")
             web_text = format_web_search(web_context)
         except Exception as exc:
@@ -1397,8 +1472,11 @@ def api_chat_stream(chat_id):
             combined_context
         ] if x
     )
-    if len(extended_context) > 10000:
-        extended_context = extended_context[-10000:]
+    context_limit = 18000 if (
+        isinstance(web_context, dict) and web_context.get("kind") in {"news", "person"}
+    ) else 10000
+    if len(extended_context) > context_limit:
+        extended_context = extended_context[-context_limit:]
 
     prompt = build_prompt(
         normalized_text,
@@ -1406,6 +1484,7 @@ def api_chat_stream(chat_id):
         history=recent,
         web_context=extended_context
     )
+    source_rows = _sources_from_web_result(web_context)
     selected_model = choose_model(normalized_text, resolve_selected_model(uid))
 
     @stream_with_context
@@ -1418,6 +1497,7 @@ def api_chat_stream(chat_id):
                 "seasonal_mode": seasonal_mode.to_dict(),
                 "web_used": bool(web_context.get("used")) if isinstance(web_context, dict) else False,
                 "web_kind": web_context.get("kind") if isinstance(web_context, dict) else None,
+                "sources": source_rows,
             }
             yield json.dumps(meta, ensure_ascii=False) + "\n"
             try:
@@ -1440,9 +1520,10 @@ def api_chat_stream(chat_id):
             answer = validation.cleaned
             if answer:
                 conn = connect()
+                stored_answer = _attach_source_marker(answer, source_rows)
                 conn.execute(
                     "INSERT INTO chat_messages(chat_id,role,content,created_at) VALUES(?,?,?,?)",
-                    (chat_id, "assistant", answer, now())
+                    (chat_id, "assistant", stored_answer, now())
                 )
                 conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
                 conn.commit()
@@ -1565,8 +1646,8 @@ def api_chat_send(chat_id):
     if WEB_SEARCH_ENABLED:
         try:
             settings = get_user_settings(uid)
-            search_query = refine_search_query(question_analysis, history_for_llm)
-            web_context = web_search(search_query, mode=settings.get("web_mode", "auto"))
+            search_query = text if is_person_query(text) else refine_search_query(question_analysis, history_for_llm)
+            web_context = web_search(search_query, mode=("always" if is_person_query(text) else settings.get("web_mode", "auto")))
             web_context_text = format_web_search(web_context)
         except Exception as exc:
             log("WARNING", f"web search: {exc}")
@@ -1597,10 +1678,12 @@ def api_chat_send(chat_id):
         log("ERROR", f"chat generation: {exc}")
         answer = "AI 응답을 생성하지 못했습니다. 미니PC의 Ollama 상태를 확인해 주세요."
 
+    source_rows = _sources_from_web_result(web_context)
+    stored_answer = _attach_source_marker(answer, source_rows)
     conn = connect()
     conn.execute(
         "INSERT INTO chat_messages(chat_id,role,content,created_at) VALUES(?,?,?,?)",
-        (chat_id, "assistant", answer, now())
+        (chat_id, "assistant", stored_answer, now())
     )
     conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
     conn.commit()
