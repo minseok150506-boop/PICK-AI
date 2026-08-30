@@ -7,6 +7,7 @@ const state = {
   messages: [],
   sending: false,
   abortController: null,
+  stopRequested: false,
   jobPollers: {},
   settings: {
     selected_model: "auto",
@@ -97,22 +98,40 @@ function autoGrow(el) {
   el.style.height = Math.min(el.scrollHeight, 180) + "px";
 }
 
+function getActiveBackgroundJob() {
+  const rows = state.messages
+    .filter(m => Number(m.__jobId) && ["queued", "running"].includes(String(m.__jobStatus || "")))
+    .filter(m => !m.__cancelRequested);
+  rows.sort((a, b) => {
+    const ar = a.__jobStatus === "running" ? 0 : 1;
+    const br = b.__jobStatus === "running" ? 0 : 1;
+    if (ar !== br) return ar - br;
+    return Number(a.__jobId) - Number(b.__jobId);
+  });
+  return rows[0] || null;
+}
+
+function responseIsActive() {
+  return Boolean(state.sending || getActiveBackgroundJob());
+}
+
 function updateSendButtons() {
   const h = $("homeSendBtn");
   const s = $("sendBtn");
+  const active = responseIsActive();
 
   if (h) {
-    h.disabled = state.sending ? false : !$("homeInput")?.value.trim();
-    h.textContent = state.sending ? "■" : "↑";
-    h.setAttribute("aria-label", state.sending ? "답변 중지" : "전송");
-    h.title = state.sending ? "답변 중지" : "전송";
+    h.disabled = active ? false : !$("homeInput")?.value.trim();
+    h.textContent = active ? "■" : "↑";
+    h.setAttribute("aria-label", active ? "답변 중지" : "전송");
+    h.title = active ? "답변 중지" : "전송";
   }
 
   if (s) {
-    s.disabled = state.sending ? false : !$("messageInput")?.value.trim();
-    s.textContent = state.sending ? "■" : "↑";
-    s.setAttribute("aria-label", state.sending ? "답변 중지" : "전송");
-    s.title = state.sending ? "답변 중지" : "전송";
+    s.disabled = active ? false : !$("messageInput")?.value.trim();
+    s.textContent = active ? "■" : "↑";
+    s.setAttribute("aria-label", active ? "답변 중지" : "전송");
+    s.title = active ? "답변 중지" : "전송";
   }
 }
 
@@ -305,15 +324,115 @@ function renderMessages(scroll = true) {
   if (scroll) requestAnimationFrame(() => box.scrollTop = box.scrollHeight);
 }
 
-function backgroundJobText(job){
-  if(job?.status==="queued")return "답변을 준비하고 있습니다…";
-  if(job?.status==="running")return job.partial_text||"답변을 생성하고 있습니다…";
-  return job?.result_text||job?.partial_text||"답변을 준비하고 있습니다…";
+function backgroundJobText(job) {
+  if (job?.cancel_requested && ["queued", "running"].includes(job?.status)) {
+    return job?.partial_text || "답변 생성을 중지하고 있습니다…";
+  }
+  if (job?.status === "queued") return "답변을 준비하고 있습니다…";
+  if (job?.status === "running") return job.partial_text || "답변을 생성하고 있습니다…";
+  return job?.result_text || job?.partial_text || "답변을 준비하고 있습니다…";
 }
-function mergeBackgroundJobs(jobs){for(const job of(Array.isArray(jobs)?jobs:[])){const id=Number(job.id);if(!id)continue;let m=state.messages.find(x=>Number(x.__jobId)===id);if(!m){m={role:"assistant",content:"",__jobId:id};state.messages.push(m);}m.content=backgroundJobText(job);m.__jobStatus=job.status;m.__pickActivity=["queued","running"].includes(job.status);if(Array.isArray(job.sources))m.sources=job.sources;}}
-async function refreshChatAfterBackgroundJob(chatId){if(Number(state.currentChatId)!==Number(chatId))return;const data=await api(`/api/chat/${chatId}`);state.messages=data.messages||[];mergeBackgroundJobs(data.jobs||[]);renderMessages(false);for(const job of(data.jobs||[]))pollBackgroundJob(job.id,chatId);try{const boot=await api("/api/bootstrap");state.chats=boot.chats||state.chats;renderChatList();}catch(_){}}
-function pollBackgroundJob(jobId,chatId){const key=String(jobId);if(state.jobPollers[key])return;state.jobPollers[key]=true;const tick=async()=>{try{const data=await api(`/api/jobs/${jobId}`),job=data.job||{};if(Number(state.currentChatId)===Number(chatId)){mergeBackgroundJobs([job]);renderMessages(false);}if(["done","failed","cancelled"].includes(job.status)){delete state.jobPollers[key];await refreshChatAfterBackgroundJob(chatId);if(job.status==="done")showToast("백그라운드 답변이 완료되었습니다.");return;}setTimeout(tick,900);}catch(_){setTimeout(tick,1800);}};tick();}
-function resumeBackgroundJobs(jobs,chatId){const rows=Array.isArray(jobs)?jobs:[];mergeBackgroundJobs(rows);for(const job of rows)pollBackgroundJob(job.id,chatId);}
+
+function mergeBackgroundJobs(jobs) {
+  for (const job of (Array.isArray(jobs) ? jobs : [])) {
+    const id = Number(job.id);
+    if (!id) continue;
+    let m = state.messages.find(x => Number(x.__jobId) === id);
+    if (!m) {
+      m = {role: "assistant", content: "", __jobId: id};
+      state.messages.push(m);
+    }
+    m.content = backgroundJobText(job);
+    m.__cancelRequested = Boolean(job.cancel_requested);
+    m.__jobStatus = m.__cancelRequested && ["queued", "running"].includes(job.status)
+      ? "cancelling" : job.status;
+    m.__pickActivity = ["queued", "running", "cancelling"].includes(m.__jobStatus);
+    if (Array.isArray(job.sources)) m.sources = job.sources;
+  }
+  updateSendButtons();
+}
+
+async function refreshChatAfterBackgroundJob(chatId) {
+  if (Number(state.currentChatId) !== Number(chatId)) return;
+  const data = await api(`/api/chat/${chatId}`);
+  state.messages = data.messages || [];
+  mergeBackgroundJobs(data.jobs || []);
+  renderMessages(false);
+  for (const job of (data.jobs || [])) pollBackgroundJob(job.id, chatId);
+  try {
+    const boot = await api("/api/bootstrap");
+    state.chats = boot.chats || state.chats;
+    renderChatList();
+  } catch (_) {}
+  updateSendButtons();
+}
+
+function pollBackgroundJob(jobId, chatId) {
+  const key = String(jobId);
+  if (state.jobPollers[key]) return;
+  state.jobPollers[key] = true;
+  const tick = async () => {
+    try {
+      const data = await api(`/api/jobs/${jobId}`);
+      const job = data.job || {};
+      if (Number(state.currentChatId) === Number(chatId)) {
+        mergeBackgroundJobs([job]);
+        renderMessages(false);
+      }
+      if (["done", "failed", "cancelled"].includes(job.status)) {
+        delete state.jobPollers[key];
+        await refreshChatAfterBackgroundJob(chatId);
+        if (job.status === "done") showToast("백그라운드 답변이 완료되었습니다.");
+        updateSendButtons();
+        return;
+      }
+      setTimeout(tick, 900);
+    } catch (_) {
+      setTimeout(tick, 1800);
+    }
+  };
+  tick();
+}
+
+function resumeBackgroundJobs(jobs, chatId) {
+  const rows = Array.isArray(jobs) ? jobs : [];
+  mergeBackgroundJobs(rows);
+  for (const job of rows) pollBackgroundJob(job.id, chatId);
+  updateSendButtons();
+}
+
+async function cancelBackgroundJob(jobId, chatId = state.currentChatId) {
+  const id = Number(jobId);
+  if (!id) return false;
+  const existing = state.messages.find(m => Number(m.__jobId) === id);
+  if (existing) {
+    existing.__cancelRequested = true;
+    existing.__jobStatus = "cancelling";
+    existing.__pickActivity = true;
+    if (!existing.content || existing.content === "답변을 준비하고 있습니다…" || existing.content === "답변을 생성하고 있습니다…") {
+      existing.content = "답변 생성을 중지하고 있습니다…";
+    }
+  }
+  renderMessages(false);
+  updateSendButtons();
+  try {
+    const data = await api(`/api/jobs/${id}/cancel`, {method: "POST"});
+    if (data.job) {
+      mergeBackgroundJobs([data.job]);
+      pollBackgroundJob(id, chatId);
+    }
+    showToast("답변 중지를 요청했습니다.");
+    return true;
+  } catch (e) {
+    if (existing) {
+      existing.__cancelRequested = false;
+      existing.__jobStatus = "running";
+    }
+    updateSendButtons();
+    showToast(e.message);
+    return false;
+  }
+}
 
 async function createChat() {
   const data = await api("/api/chat/new", {method: "POST"});
@@ -384,12 +503,17 @@ function closeChatMenu() {
 }
 
 
-function stopCurrentResponse() {
-  if (!state.sending) return;
-  if (state.abortController) {
-    state.abortController.abort();
+async function stopCurrentResponse() {
+  const job = getActiveBackgroundJob();
+  if (job) {
+    await cancelBackgroundJob(job.__jobId, state.currentChatId);
+    return;
   }
-  showToast("답변 생성을 중지했습니다.");
+  if (state.sending) {
+    state.stopRequested = true;
+    showToast("답변 중지를 요청했습니다.");
+    updateSendButtons();
+  }
 }
 
 function weatherQuery(text) {
@@ -447,7 +571,58 @@ function buildFollowUps(query) {
 }
 
 
-async function sendTextStreaming(text){const clean=String(text||"").trim();if(!clean||state.sending)return;if(!state.currentChatId)await createChat();const chatId=Number(state.currentChatId);state.sending=true;updateSendButtons();if($("messageInput")){$("messageInput").value="";autoGrow($("messageInput"));}try{const gps=await getGpsForWeather(clean);const data=await api(`/api/chat/${chatId}/background`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:clean,timezone:getClientTimezone(),country:getClientCountry(),...gps})});state.messages=data.messages||state.messages;state.chats=data.chats||state.chats;if(data.job){mergeBackgroundJobs([data.job]);pollBackgroundJob(data.job.id,chatId);}renderChatList();renderMessages();}catch(err){showToast(err.message);}finally{state.sending=false;state.abortController=null;updateSendButtons();$("messageInput")?.focus();}}
+async function sendTextStreaming(text) {
+  const clean = String(text || "").trim();
+  if (!clean) return;
+  if (getActiveBackgroundJob() || state.sending) {
+    await stopCurrentResponse();
+    return;
+  }
+  if (!state.currentChatId) await createChat();
+  const chatId = Number(state.currentChatId);
+  state.sending = true;
+  state.stopRequested = false;
+  updateSendButtons();
+
+  if ($("messageInput")) {
+    $("messageInput").value = "";
+    autoGrow($("messageInput"));
+  }
+
+  try {
+    const gps = await getGpsForWeather(clean);
+    if (state.stopRequested) return;
+
+    const data = await api(`/api/chat/${chatId}/background`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        message: clean,
+        timezone: getClientTimezone(),
+        country: getClientCountry(),
+        ...gps
+      })
+    });
+
+    state.messages = data.messages || state.messages;
+    state.chats = data.chats || state.chats;
+    if (data.job) {
+      mergeBackgroundJobs([data.job]);
+      pollBackgroundJob(data.job.id, chatId);
+      if (state.stopRequested) await cancelBackgroundJob(data.job.id, chatId);
+    }
+    renderChatList();
+    renderMessages();
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    state.sending = false;
+    state.abortController = null;
+    state.stopRequested = false;
+    updateSendButtons();
+    $("messageInput")?.focus();
+  }
+}
 
 async function sendFromHome() {
   const text = $("homeInput")?.value.trim();
@@ -1235,8 +1410,8 @@ document.addEventListener("click", async event => {
 // Direct listeners: bind only if the element exists.
 $("newChatBtn")?.addEventListener("click", startNewChatView);
 $("topNewChatBtn")?.addEventListener("click", startNewChatView);
-$("homeSendBtn")?.addEventListener("click", () => state.sending ? stopCurrentResponse() : sendFromHome());
-$("sendBtn")?.addEventListener("click", () => state.sending ? stopCurrentResponse() : sendTextStreaming($("messageInput")?.value || ""));
+$("homeSendBtn")?.addEventListener("click", () => responseIsActive() ? stopCurrentResponse() : sendFromHome());
+$("sendBtn")?.addEventListener("click", () => responseIsActive() ? stopCurrentResponse() : sendTextStreaming($("messageInput")?.value || ""));
 $("memoryCenterBtn")?.addEventListener("click", openMemoryCenter);
 $("learningBtn")?.addEventListener("click", openLearningCenter);
 $("settingsBtn")?.addEventListener("click", openSettings);
@@ -1286,7 +1461,8 @@ $("manualSearchInput")?.addEventListener("keydown", e => {
     if (e.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      id === "homeInput" ? sendFromHome() : sendTextStreaming($("messageInput")?.value || "");
+      if (responseIsActive()) stopCurrentResponse();
+      else id === "homeInput" ? sendFromHome() : sendTextStreaming($("messageInput")?.value || "");
     }
   });
 });

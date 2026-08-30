@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 
 from config import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_FALLBACK_MODELS, VISION_MODEL
-from model_council import should_use_council_prompt, generate_consensus
+from model_council import should_use_council_prompt, generate_consensus, CouncilCancelled
 
 
 class OllamaError(RuntimeError):
@@ -226,7 +226,10 @@ def vision_analyze(image_paths, prompt):
     return str((data.get("message") or {}).get("content") or "").strip()
 
 
-def stream_generate(prompt, model=None, timeout=300):
+def stream_generate(prompt, model=None, timeout=300, is_cancelled=None):
+    if is_cancelled and is_cancelled():
+        return
+
     candidates = _model_candidates(model or OLLAMA_MODEL)
     last_error = None
     coding_mode = "[Coding mode]" in prompt
@@ -238,18 +241,31 @@ def stream_generate(prompt, model=None, timeout=300):
 
     if should_use_council_prompt(prompt):
         try:
-            council_result = generate_consensus(prompt)
+            council_result = generate_consensus(prompt, is_cancelled=is_cancelled)
+            if is_cancelled and is_cancelled():
+                return
             council_answer = str((council_result or {}).get("answer") or "").strip()
             if council_answer:
                 step = 64
                 for i in range(0, len(council_answer), step):
+                    if is_cancelled and is_cancelled():
+                        return
                     yield {"type": "token", "text": council_answer[i:i + step], "model": "PICK-Council"}
-                yield {"type": "done", "model": "PICK-Council", "contributors": (council_result or {}).get("contributors", [])}
+                yield {
+                    "type": "done",
+                    "model": "PICK-Council",
+                    "contributors": (council_result or {}).get("contributors", []),
+                }
                 return
+        except CouncilCancelled:
+            return
         except Exception:
             pass
 
     for selected in candidates:
+        if is_cancelled and is_cancelled():
+            return
+
         payload = {
             "model": selected,
             "prompt": prompt,
@@ -272,6 +288,8 @@ def stream_generate(prompt, model=None, timeout=300):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 for raw in response:
+                    if is_cancelled and is_cancelled():
+                        return
                     if not raw.strip():
                         continue
                     item = json.loads(raw.decode("utf-8", errors="replace"))
@@ -282,8 +300,13 @@ def stream_generate(prompt, model=None, timeout=300):
                         yield {"type": "done", "model": selected}
                         return
         except Exception as exc:
+            if is_cancelled and is_cancelled():
+                return
             last_error = exc
             continue
+
+    if is_cancelled and is_cancelled():
+        return
 
     yield {
         "type": "error",

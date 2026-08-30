@@ -8,6 +8,10 @@ from typing import Any
 
 from config import OLLAMA_HOST
 
+class CouncilCancelled(RuntimeError):
+    pass
+
+
 DEFAULT_COUNCIL_MODELS = [
     ("Alibaba Qwen", "qwen3:8b"),
     ("Google Gemma", "gemma3:4b"),
@@ -118,7 +122,10 @@ def should_use_council_prompt(prompt: str) -> bool:
     return "?" in text or any(x in lower for x in signals)
 
 
-def _generate(model: str, prompt: str, num_predict: int, timeout: int) -> str:
+def _generate(model: str, prompt: str, num_predict: int, timeout: int, is_cancelled=None) -> str:
+    if is_cancelled and is_cancelled():
+        raise CouncilCancelled()
+
     payload = {
         "model": model,
         "prompt": prompt,
@@ -135,15 +142,14 @@ def _generate(model: str, prompt: str, num_predict: int, timeout: int) -> str:
     req = urllib.request.Request(
         OLLAMA_HOST.rstrip("/") + "/api/generate",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/x-ndjson",
-        },
+        headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
         method="POST",
     )
     parts = []
     with urllib.request.urlopen(req, timeout=timeout) as response:
         for raw in response:
+            if is_cancelled and is_cancelled():
+                raise CouncilCancelled()
             if not raw.strip():
                 continue
             item = json.loads(raw.decode("utf-8", errors="replace"))
@@ -154,10 +160,16 @@ def _generate(model: str, prompt: str, num_predict: int, timeout: int) -> str:
                 raise RuntimeError(str(item.get("error")))
             if item.get("done"):
                 break
+
+    if is_cancelled and is_cancelled():
+        raise CouncilCancelled()
     return "".join(parts).strip()
 
 
-def generate_consensus(prompt: str, timeout_each: int = 600):
+def generate_consensus(prompt: str, timeout_each: int = 600, is_cancelled=None):
+    if is_cancelled and is_cancelled():
+        raise CouncilCancelled()
+
     installed = set(available_models())
     council = [(company, model) for company, model in configured_models() if model in installed]
     if len(council) < 2:
@@ -176,17 +188,26 @@ def generate_consensus(prompt: str, timeout_each: int = 600):
     opinions = []
     errors = []
     for company, model in council:
+        if is_cancelled and is_cancelled():
+            raise CouncilCancelled()
         try:
-            answer = _generate(model, reviewer_prompt, 360, timeout_each)
+            answer = _generate(
+                model, reviewer_prompt, 360, timeout_each,
+                is_cancelled=is_cancelled,
+            )
             if answer:
                 opinions.append({
                     "company": company,
                     "model": model,
                     "answer": answer[:8000],
                 })
+        except CouncilCancelled:
+            raise
         except Exception as exc:
             errors.append({"model": model, "error": str(exc)[:300]})
 
+    if is_cancelled and is_cancelled():
+        raise CouncilCancelled()
     if len(opinions) < 2:
         return None
 
@@ -217,10 +238,17 @@ def generate_consensus(prompt: str, timeout_each: int = 600):
 - 자연스러운 한국어 존댓말로 PICK의 최종 답변만 작성하세요.
 """
     try:
-        final_answer = _generate(judge_model, final_prompt, 850, max(timeout_each, 600))
+        final_answer = _generate(
+            judge_model, final_prompt, 850, max(timeout_each, 600),
+            is_cancelled=is_cancelled,
+        )
+    except CouncilCancelled:
+        raise
     except Exception:
         final_answer = ""
 
+    if is_cancelled and is_cancelled():
+        raise CouncilCancelled()
     if not final_answer:
         final_answer = opinions[0]["answer"]
 

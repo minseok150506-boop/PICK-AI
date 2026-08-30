@@ -569,7 +569,7 @@ def process_background_chat_job(job, update_partial, is_cancelled):
     full=[]; had_error=False; last_model=selected; n=0
     try:
         with guard.slot():
-            for item in stream_generate(prompt,model=selected):
+            for item in stream_generate(prompt,model=selected,is_cancelled=is_cancelled):
                 if is_cancelled(): raise JobCancelled()
                 if item.get("type")=="token":
                     chunk=str(item.get("text") or "")
@@ -581,6 +581,7 @@ def process_background_chat_job(job, update_partial, is_cancelled):
                     if not full: raise RuntimeError(str(item.get("text") or "AI 생성 오류"))
             guard.failure() if had_error else guard.success()
     except (InferenceBusy,CircuitOpen) as e: raise RuntimeError(str(e)) from e
+    if is_cancelled(): raise JobCancelled()
     answer="".join(full).strip()
     if not answer: raise RuntimeError("PICK이 빈 답변을 생성했습니다.")
     val=validate_answer(answer,web_used=bool(web_context.get("used")) if isinstance(web_context,dict) else False,coding=bool(route.get("use_coding"))); answer=val.cleaned.strip()
