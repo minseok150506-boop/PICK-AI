@@ -386,9 +386,9 @@ function pollBackgroundJob(jobId, chatId) {
         updateSendButtons();
         return;
       }
-      setTimeout(tick, 900);
+      setTimeout(tick, 400);
     } catch (_) {
-      setTimeout(tick, 1800);
+      setTimeout(tick, 1000);
     }
   };
   tick();

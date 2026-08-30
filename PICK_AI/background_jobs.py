@@ -191,7 +191,7 @@ def start_worker(processor,after_complete=None):
             try:
                 if time.monotonic()-last>60: _recover_stale(); last=time.monotonic()
                 job=_claim()
-                if not job: time.sleep(.7); continue
+                if not job: time.sleep(.2); continue
                 stop=threading.Event(); threading.Thread(target=_heartbeat,args=(job["id"],stop),daemon=True).start()
                 try:
                     if is_cancel_requested(job["id"]): raise JobCancelled()

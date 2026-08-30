@@ -179,8 +179,8 @@ PICK:"""
                     "options": {
                         "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.40)),
                         "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
-                        "num_ctx": 12288 if (coding_mode or news_mode or person_mode) else 6144,
-                        "num_predict": 1800 if coding_mode else (1300 if person_mode else (1200 if news_mode else 760)),
+                        "num_ctx": 8192 if coding_mode else (6144 if (news_mode or person_mode) else 4096),
+                        "num_predict": 1200 if coding_mode else (900 if person_mode else (700 if news_mode else 460)),
                     }
                 }, timeout=self.timeout)
                 answer = str(data.get("response") or "").strip()
@@ -277,8 +277,8 @@ def stream_generate(prompt, model=None, timeout=300, is_cancelled=None):
             "options": {
                 "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.38)),
                 "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
-                "num_ctx": 12288 if (coding_mode or news_mode or person_mode) else 6144,
-                "num_predict": 1800 if coding_mode else (1300 if person_mode else (1200 if news_mode else 650)),
+                "num_ctx": 8192 if coding_mode else (6144 if (news_mode or person_mode) else 4096),
+                "num_predict": 1200 if coding_mode else (900 if person_mode else (700 if news_mode else 420)),
             },
         }
         req = urllib.request.Request(

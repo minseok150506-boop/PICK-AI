@@ -85,7 +85,7 @@ def _user_text(prompt: str) -> str:
 
 
 def should_use_council_prompt(prompt: str) -> bool:
-    enabled = str(os.environ.get("PICK_COUNCIL_ENABLED", "1")).lower().strip()
+    enabled = str(os.environ.get("PICK_COUNCIL_ENABLED", "manual")).lower().strip()
     if enabled in {"0", "false", "off", "no"}:
         return False
 
@@ -94,32 +94,22 @@ def should_use_council_prompt(prompt: str) -> bool:
         "[Coding mode]",
         "[Translation mode]",
         "[PICK NEWS DETAIL MODE]",
-        "반드시 JSON만 출력하세요",
         "JSON만 출력하세요",
     )):
         return False
 
-    text = _user_text(value)
-    lower = text.lower()
-    if len(text) < 8:
-        return False
-
-    if any(x in lower for x in (
-        "안녕", "고마워", "감사", "번역", "translate",
-        "코드", "코딩", "오류", "에러", "버그",
-        "날씨", "기온", "풍향", "풍속", "우편번호",
-        "네비", "내비", "길찾기", "엑셀", "워드",
-        "ppt", "프레젠테이션", "파일 만들어",
-    )):
-        return False
-
-    signals = (
-        "누구", "뭐야", "무엇", "왜", "어떻게", "설명", "알려",
-        "정확", "사실", "비교", "차이", "원인", "추천", "의미",
-        "역사", "과학", "수학", "법", "정보", "검증", "확인",
-        "who", "what", "why", "how", "compare", "explain",
+    text = _user_text(value).lower()
+    explicit = (
+        "6개 ai", "여섯 개 ai", "여러 ai", "ai 합의", "모델 합의",
+        "교차 검증", "교차검증", "정밀 검증", "깊게 검토", "다중 모델",
+        "council", "cross-check", "cross check",
     )
-    return "?" in text or any(x in lower for x in signals)
+    if any(x in text for x in explicit):
+        return True
+
+    return enabled in {"1", "true", "on", "always"}
+
+
 
 
 def _generate(model: str, prompt: str, num_predict: int, timeout: int, is_cancelled=None) -> str:

@@ -1,5 +1,4 @@
-from config import OLLAMA_MODEL
-from pick_llm import ollama_health
+import os
 
 CODING_HINTS = (
     "코드", "코딩", "프로그래밍", "에러", "오류", "버그", "디버그",
@@ -8,30 +7,32 @@ CODING_HINTS = (
     "powershell", "bash", "api", "함수", "클래스", ".py", ".js", ".cmd", ".ps1",
 )
 
+HARD_HINTS = (
+    "깊게", "자세히", "정밀", "분석", "비교", "검증", "증명", "추론",
+    "원인", "설계", "전략", "계획", "법률", "법적", "수학", "계산",
+    "복잡", "단계별", "장단점", "논리", "연구", "보고서",
+    "analyze", "compare", "reason", "prove", "research",
+)
+
+FAST_HINTS = (
+    "안녕", "고마워", "뜻", "뭐야", "무슨", "간단", "요약",
+    "누구야", "어디", "언제", "몇", "추천", "알려줘", "알려 주세요",
+)
+
+
 def choose_model(text, selected_model=None):
     if selected_model and selected_model != "auto":
         return selected_model
 
-    t = str(text or "").lower()
-    coding = any(k in t for k in CODING_HINTS)
+    t = str(text or "").strip().lower()
 
-    try:
-        available = ollama_health()
-    except Exception:
-        return OLLAMA_MODEL
+    if any(k in t for k in CODING_HINTS):
+        return os.environ.get("PICK_CODING_MODEL", "qwen2.5-coder:7b")
 
-    if coding:
-        prefs = [
-            "qwen2.5-coder:14b",
-            "qwen2.5-coder:7b",
-            "qwen3:8b",
-            OLLAMA_MODEL,
-            "qwen3:4b",
-        ]
-    else:
-        prefs = [OLLAMA_MODEL, "qwen3:8b", "qwen3:4b", "llama3:latest"]
+    if any(k in t for k in HARD_HINTS) or len(t) >= 260:
+        return os.environ.get("PICK_SMART_MODEL", "qwen3:8b")
 
-    for model in prefs:
-        if model and model in available:
-            return model
-    return available[0] if available else OLLAMA_MODEL
+    if any(k in t for k in FAST_HINTS) or len(t) <= 140:
+        return os.environ.get("PICK_FAST_MODEL", "gemma3:4b")
+
+    return os.environ.get("PICK_BALANCED_MODEL", "gemma3:4b")

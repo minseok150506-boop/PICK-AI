@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 import json
 import re
 import urllib.parse
@@ -9,17 +10,18 @@ import urllib.error
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from people_research import is_person_query, extract_person_name, research_person
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PICK-AI/1.0"
-TIMEOUT = 7
+TIMEOUT = float(os.environ.get("PICK_SEARCH_TIMEOUT", "2.8"))
 _WEATHER_CACHE_TTL = 600
 _WEATHER_CACHE = {}
 
 
-def _get(url: str, timeout: int = TIMEOUT, retries: int = 2) -> bytes:
+def _get(url: str, timeout: float = TIMEOUT, retries: int = 0) -> bytes:
     req = urllib.request.Request(
         url,
         headers={
@@ -219,7 +221,7 @@ def _cache_put_weather(key: str, value: dict[str, Any]) -> dict[str, Any]:
 
 def _wttr_weather(location: str) -> dict[str, Any]:
     q = urllib.parse.quote(str(location).strip())
-    data = _json(f"https://wttr.in/{q}?format=j1", timeout=10)
+    data = _json(f"https://wttr.in/{q}?format=j1", timeout=5)
     root = data.get("data") if isinstance(data.get("data"), dict) else data
 
     current_rows = root.get("current_condition") or []
@@ -291,7 +293,7 @@ def _open_meteo_weather_from_coords(lat: float, lon: float, location_name: str) 
         "&current=temperature_2m,apparent_temperature,precipitation,rain,weather_code,wind_speed_10m,wind_direction_10m"
         "&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code"
         "&timezone=auto&forecast_days=7",
-        timeout=8,
+        timeout=4,
     )
     cur = data.get("current") or {}
     daily = data.get("daily") or {}
@@ -332,7 +334,7 @@ def weather(location: str) -> dict[str, Any]:
         geo = _json(
             "https://geocoding-api.open-meteo.com/v1/search"
             f"?name={q}&count=1&language=ko&format=json",
-            timeout=8,
+            timeout=4,
         )
         rows = geo.get("results") or []
         if not rows:
@@ -467,14 +469,16 @@ def search(query: str, mode: str = "auto") -> dict[str, Any]:
 
         result["kind"] = "web"
         rows = []
-        try:
-            rows.extend(search_duckduckgo(text, 6))
-        except Exception:
-            pass
-        try:
-            rows.extend(search_wikipedia(text, 3))
-        except Exception:
-            pass
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="pick-search") as pool:
+            futures = [
+                pool.submit(search_duckduckgo, text, 6),
+                pool.submit(search_wikipedia, text, 3),
+            ]
+            for future in as_completed(futures):
+                try:
+                    rows.extend(future.result() or [])
+                except Exception:
+                    pass
         result["results"] = dedupe(rows, 8)
 
     except Exception as exc:

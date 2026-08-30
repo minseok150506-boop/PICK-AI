@@ -584,7 +584,7 @@ def process_background_chat_job(job, update_partial, is_cancelled):
                     chunk=str(item.get("text") or "")
                     if chunk:
                         full.append(chunk); n+=1; last_model=str(item.get("model") or last_model)
-                        if n%4==0: update_partial("".join(full),sources=sources,model=last_model,meta=meta)
+                        if n==1 or n%2==0: update_partial("".join(full),sources=sources,model=last_model,meta=meta)
                 elif item.get("type")=="error":
                     had_error=True
                     if not full: raise RuntimeError(str(item.get("text") or "AI 생성 오류"))
