@@ -10,19 +10,21 @@ services:
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 240 --access-logfile - --error-logfile -
     healthCheckPath: /healthz
     autoDeploy: true
-    disk:
-      name: pick-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: SECRET_KEY
         generateValue: true
       - key: PICK_DATA_DIR
-        value: /var/data/data
+        value: /tmp/pick-data
       - key: PICK_STORAGE_DIR
-        value: /var/data/storage
+        value: /tmp/pick-storage
+      - key: PICK_DB_PATH
+        value: /tmp/pick-data/pick_service.db
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
       - key: PICK_COOKIE_SECURE
         value: "1"
       - key: PICK_TRUST_PROXY_HEADERS

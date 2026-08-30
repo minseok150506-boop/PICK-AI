@@ -22,7 +22,7 @@ from config import (
     OLLAMA_HOST, OLLAMA_MODEL, SECRET_KEY, SESSION_COOKIE_HTTPONLY,
     SESSION_COOKIE_SAMESITE, SESSION_COOKIE_SECURE
 )
-from database import connect, init_db, log, now
+from database import connect, init_db, log, now, database_status
 from pick_llm import PickLLMRouter, ollama_health, stream_generate, build_prompt
 from security import client_key, csrf_token, limiter, validate_csrf
 from web_tools import build_web_context, format_context
@@ -625,9 +625,18 @@ def api_render_status():
         "render": bool(os.environ.get("RENDER")),
         "data_dir": str(DATA_DIR),
         "storage_dir": str(STORAGE_DIR),
+        "database": database_status(deep=True),
         "ai_backend_configured": bool(os.environ.get("PICK_AI_BACKEND_URL") or os.environ.get("PICK_OLLAMA_HOST") or os.environ.get("OLLAMA_HOST")),
         "google_login_configured": bool(os.environ.get("GOOGLE_CLIENT_ID") and os.environ.get("GOOGLE_CLIENT_SECRET")),
     })
+
+@app.get("/api/database/status")
+def api_database_status():
+    auth_err = require_login_json()
+    if auth_err:
+        return auth_err
+    return jsonify({"ok": True, "database": database_status(deep=True)})
+
 
 @app.get("/healthz")
 def healthz():
@@ -733,7 +742,7 @@ def api_admin_overview():
       "audit_today":conn.execute("SELECT COUNT(*) c FROM audit_events WHERE date(created_at)=date('now','localtime')").fetchone()["c"],
     }
     conn.close()
-    return jsonify({"ok":True,"counts":counts,"inference":guard.status(),"schema_version":migrations.LATEST_SCHEMA})
+    return jsonify({"ok":True,"counts":counts,"inference":guard.status(),"database":database_status(deep=False),"schema_version":migrations.LATEST_SCHEMA})
 
 
 

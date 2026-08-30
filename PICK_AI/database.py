@@ -1,4 +1,5 @@
 import sqlite3
+import os
 from datetime import datetime
 from werkzeug.security import generate_password_hash
 
@@ -9,12 +10,254 @@ def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+_TURSO_URL = str(os.environ.get("TURSO_DATABASE_URL") or "").strip()
+_TURSO_TOKEN = str(os.environ.get("TURSO_AUTH_TOKEN") or "").strip()
+_TURSO_CONFIGURED = bool(_TURSO_URL and _TURSO_TOKEN)
+_TURSO_PARTIAL_CONFIG = bool(_TURSO_URL) ^ bool(_TURSO_TOKEN)
+
+
+class CompatRow:
+    __slots__ = ("_values", "_keys", "_exact", "_lower")
+
+    def __init__(self, values, columns):
+        self._values = tuple(values)
+        self._keys = tuple(str(x) for x in columns)
+        self._exact = {k: self._values[i] for i, k in enumerate(self._keys)}
+        self._lower = {k.lower(): self._values[i] for i, k in enumerate(self._keys)}
+
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            if key in self._exact:
+                return self._exact[key]
+            lowered = key.lower()
+            if lowered in self._lower:
+                return self._lower[lowered]
+            raise IndexError(f"No item with that key: {key}")
+        return self._values[key]
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._values)
+
+    def keys(self):
+        return list(self._keys)
+
+    def items(self):
+        return [(k, self._exact[k]) for k in self._keys]
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except (IndexError, KeyError):
+            return default
+
+    def __repr__(self):
+        return repr(dict(self.items()))
+
+
+def _description_names(description):
+    names = []
+    for item in description or ():
+        if isinstance(item, (tuple, list)):
+            names.append(str(item[0]))
+        else:
+            name = getattr(item, "name", None)
+            names.append(str(name if name is not None else item))
+    return names
+
+
+class RemoteCursor:
+    def __init__(self, raw, connection):
+        self._raw = raw
+        self._connection = connection
+
+    def _wrap(self, row):
+        if row is None:
+            return None
+        if isinstance(row, (CompatRow, sqlite3.Row)):
+            return row
+        if isinstance(row, dict):
+            return CompatRow(tuple(row.values()), tuple(row.keys()))
+        names = _description_names(getattr(self._raw, "description", None))
+        if names:
+            try:
+                return CompatRow(tuple(row), names)
+            except TypeError:
+                pass
+        return row
+
+    def execute(self, sql, parameters=()):
+        self._raw.execute(sql, parameters)
+        return self
+
+    def executemany(self, sql, seq):
+        self._raw.executemany(sql, seq)
+        return self
+
+    def fetchone(self):
+        return self._wrap(self._raw.fetchone())
+
+    def fetchall(self):
+        return [self._wrap(row) for row in self._raw.fetchall()]
+
+    def fetchmany(self, size=None):
+        rows = self._raw.fetchmany() if size is None else self._raw.fetchmany(size)
+        return [self._wrap(row) for row in rows]
+
+    def __iter__(self):
+        for row in self._raw:
+            yield self._wrap(row)
+
+    @property
+    def description(self):
+        return getattr(self._raw, "description", None)
+
+    @property
+    def rowcount(self):
+        return getattr(self._raw, "rowcount", -1)
+
+    @property
+    def lastrowid(self):
+        value = getattr(self._raw, "lastrowid", None)
+        if value not in (None, 0):
+            return value
+        try:
+            row = self._connection.execute("SELECT last_insert_rowid() AS id").fetchone()
+            return int(row["id"]) if row else value
+        except Exception:
+            return value
+
+    def close(self):
+        closer = getattr(self._raw, "close", None)
+        if closer:
+            return closer()
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
+def _split_sql_script(script):
+    statements = []
+    buffer = ""
+    for line in str(script or "").splitlines(True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                statements.append(statement)
+            buffer = ""
+    if buffer.strip():
+        statements.append(buffer.strip())
+    return statements
+
+
+class RemoteConnection:
+    def __init__(self, raw):
+        self._raw = raw
+
+    def execute(self, sql, parameters=()):
+        return RemoteCursor(self._raw.execute(sql, parameters), self)
+
+    def executemany(self, sql, seq):
+        cur = self._raw.cursor()
+        cur.executemany(sql, seq)
+        return RemoteCursor(cur, self)
+
+    def executescript(self, script):
+        last = None
+        for statement in _split_sql_script(script):
+            last = self.execute(statement)
+        return last
+
+    def cursor(self):
+        return RemoteCursor(self._raw.cursor(), self)
+
+    def commit(self):
+        return self._raw.commit()
+
+    def rollback(self):
+        return self._raw.rollback()
+
+    def close(self):
+        return self._raw.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        self.close()
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+
+def database_status(deep=False):
+    result = {
+        "mode": "turso-serverless" if _TURSO_CONFIGURED else "sqlite-local",
+        "persistent": bool(_TURSO_CONFIGURED),
+        "render": bool(os.environ.get("RENDER")),
+        "remote_configured": bool(_TURSO_CONFIGURED),
+        "partial_configuration": bool(_TURSO_PARTIAL_CONFIG),
+        "local_path": str(DB_PATH) if not _TURSO_CONFIGURED else None,
+    }
+    if _TURSO_URL:
+        safe = _TURSO_URL
+        if "://" in safe:
+            safe = safe.split("://", 1)[1]
+        result["remote_host"] = safe.split("/", 1)[0]
+    if deep:
+        try:
+            conn = connect()
+            row = conn.execute(
+                "SELECT "
+                "(SELECT COUNT(*) FROM chats) AS chats,"
+                "(SELECT COUNT(*) FROM chat_messages) AS messages"
+            ).fetchone()
+            result["reachable"] = True
+            result["chats"] = int(row["chats"]) if row else 0
+            result["messages"] = int(row["messages"]) if row else 0
+            conn.close()
+        except Exception as exc:
+            result["reachable"] = False
+            result["error"] = str(exc)[:500]
+    return result
+
+
 def connect():
+    if _TURSO_PARTIAL_CONFIG:
+        raise RuntimeError(
+            "Turso configuration is incomplete. Set both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN."
+        )
+
+    if _TURSO_CONFIGURED:
+        try:
+            import turso_serverless
+        except Exception as exc:
+            raise RuntimeError(
+                "turso_serverless is required. Run pip install turso_serverless."
+            ) from exc
+        try:
+            raw = turso_serverless.connect(
+                _TURSO_URL,
+                auth_token=_TURSO_TOKEN,
+            )
+            return RemoteConnection(raw)
+        except Exception as exc:
+            raise RuntimeError(f"Could not connect PICK to Turso Cloud: {exc}") from exc
+
     conn = sqlite3.connect(str(DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
+
 
 
 def _columns(conn, table):
@@ -23,8 +266,9 @@ def _columns(conn, table):
 
 def init_db():
     conn = connect()
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    if not _TURSO_CONFIGURED:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
 
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS users (
