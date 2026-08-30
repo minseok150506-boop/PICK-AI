@@ -306,8 +306,8 @@ function renderMessages(scroll = true) {
 }
 
 function backgroundJobText(job){
-  if(job?.status==="queued")return "질문이 저장되었습니다. 답변 순서를 기다리고 있습니다… 사이트를 나가도 계속됩니다.";
-  if(job?.status==="running")return job.partial_text||"PICK이 백그라운드에서 답변을 생성하고 있습니다… 사이트를 나가도 계속됩니다.";
+  if(job?.status==="queued")return "답변을 준비하고 있습니다…";
+  if(job?.status==="running")return job.partial_text||"답변을 생성하고 있습니다…";
   return job?.result_text||job?.partial_text||"답변을 준비하고 있습니다…";
 }
 function mergeBackgroundJobs(jobs){for(const job of(Array.isArray(jobs)?jobs:[])){const id=Number(job.id);if(!id)continue;let m=state.messages.find(x=>Number(x.__jobId)===id);if(!m){m={role:"assistant",content:"",__jobId:id};state.messages.push(m);}m.content=backgroundJobText(job);m.__jobStatus=job.status;m.__pickActivity=["queued","running"].includes(job.status);if(Array.isArray(job.sources))m.sources=job.sources;}}
@@ -447,7 +447,7 @@ function buildFollowUps(query) {
 }
 
 
-async function sendTextStreaming(text){const clean=String(text||"").trim();if(!clean||state.sending)return;if(!state.currentChatId)await createChat();const chatId=Number(state.currentChatId);state.sending=true;updateSendButtons();if($("messageInput")){$("messageInput").value="";autoGrow($("messageInput"));}try{const gps=await getGpsForWeather(clean);const data=await api(`/api/chat/${chatId}/background`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:clean,timezone:getClientTimezone(),country:getClientCountry(),...gps})});state.messages=data.messages||state.messages;state.chats=data.chats||state.chats;if(data.job){mergeBackgroundJobs([data.job]);pollBackgroundJob(data.job.id,chatId);}renderChatList();renderMessages();showToast("질문을 저장했습니다. 이제 사이트를 나가도 답변 생성이 계속됩니다.");}catch(err){showToast(err.message);}finally{state.sending=false;state.abortController=null;updateSendButtons();$("messageInput")?.focus();}}
+async function sendTextStreaming(text){const clean=String(text||"").trim();if(!clean||state.sending)return;if(!state.currentChatId)await createChat();const chatId=Number(state.currentChatId);state.sending=true;updateSendButtons();if($("messageInput")){$("messageInput").value="";autoGrow($("messageInput"));}try{const gps=await getGpsForWeather(clean);const data=await api(`/api/chat/${chatId}/background`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:clean,timezone:getClientTimezone(),country:getClientCountry(),...gps})});state.messages=data.messages||state.messages;state.chats=data.chats||state.chats;if(data.job){mergeBackgroundJobs([data.job]);pollBackgroundJob(data.job.id,chatId);}renderChatList();renderMessages();}catch(err){showToast(err.message);}finally{state.sending=false;state.abortController=null;updateSendButtons();$("messageInput")?.focus();}}
 
 async function sendFromHome() {
   const text = $("homeInput")?.value.trim();

@@ -174,8 +174,14 @@ def _retry_or_fail(job,exc):
     c.execute("""UPDATE chat_jobs SET status='failed',error=?,result_text=?,answer_message_id=?,finished_at=?,updated_at=? WHERE id=?""",
               (err,msg,mid,stamp,stamp,r["id"])); c.commit(); c.close()
 
+def recover_orphaned_jobs_on_startup():
+    ensure_job_table()
+    c=connect()
+    c.execute("UPDATE chat_jobs SET status='queued',started_at=NULL,error='',updated_at=? WHERE status='running' AND cancel_requested=0",(now(),))
+    c.commit(); c.close()
+
 def start_worker(processor,after_complete=None):
-    global _started; ensure_job_table()
+    global _started; ensure_job_table(); recover_orphaned_jobs_on_startup()
     with _start_lock:
         if _started: return
         _started=True

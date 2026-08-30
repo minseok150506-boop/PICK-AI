@@ -119,26 +119,45 @@ def should_use_council_prompt(prompt: str) -> bool:
 
 
 def _generate(model: str, prompt: str, num_predict: int, timeout: int) -> str:
-    data = _request(
-        "/api/generate",
-        {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "keep_alive": 0,
-            "options": {
-                "temperature": 0.18,
-                "top_p": 0.90,
-                "num_ctx": 8192,
-                "num_predict": num_predict,
-            },
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": True,
+        "keep_alive": 0,
+        "think": False,
+        "options": {
+            "temperature": 0.18,
+            "top_p": 0.90,
+            "num_ctx": 8192,
+            "num_predict": num_predict,
         },
-        timeout=timeout,
+    }
+    req = urllib.request.Request(
+        OLLAMA_HOST.rstrip("/") + "/api/generate",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/x-ndjson",
+        },
+        method="POST",
     )
-    return str(data.get("response") or "").strip()
+    parts = []
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        for raw in response:
+            if not raw.strip():
+                continue
+            item = json.loads(raw.decode("utf-8", errors="replace"))
+            chunk = str(item.get("response") or "")
+            if chunk:
+                parts.append(chunk)
+            if item.get("error"):
+                raise RuntimeError(str(item.get("error")))
+            if item.get("done"):
+                break
+    return "".join(parts).strip()
 
 
-def generate_consensus(prompt: str, timeout_each: int = 180):
+def generate_consensus(prompt: str, timeout_each: int = 600):
     installed = set(available_models())
     council = [(company, model) for company, model in configured_models() if model in installed]
     if len(council) < 2:
@@ -158,7 +177,7 @@ def generate_consensus(prompt: str, timeout_each: int = 180):
     errors = []
     for company, model in council:
         try:
-            answer = _generate(model, reviewer_prompt, 650, timeout_each)
+            answer = _generate(model, reviewer_prompt, 360, timeout_each)
             if answer:
                 opinions.append({
                     "company": company,
@@ -198,7 +217,7 @@ def generate_consensus(prompt: str, timeout_each: int = 180):
 - 자연스러운 한국어 존댓말로 PICK의 최종 답변만 작성하세요.
 """
     try:
-        final_answer = _generate(judge_model, final_prompt, 1100, max(timeout_each, 240))
+        final_answer = _generate(judge_model, final_prompt, 850, max(timeout_each, 600))
     except Exception:
         final_answer = ""
 
