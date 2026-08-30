@@ -1,5 +1,6 @@
 import sqlite3
 import os
+from pathlib import Path
 from datetime import datetime
 from werkzeug.security import generate_password_hash
 
@@ -14,6 +15,8 @@ _TURSO_URL = str(os.environ.get("TURSO_DATABASE_URL") or "").strip()
 _TURSO_TOKEN = str(os.environ.get("TURSO_AUTH_TOKEN") or "").strip()
 _TURSO_CONFIGURED = bool(_TURSO_URL and _TURSO_TOKEN)
 _TURSO_PARTIAL_CONFIG = bool(_TURSO_URL) ^ bool(_TURSO_TOKEN)
+_LAST_DB_ERROR = ""
+_LAST_DB_MODE = "turso-serverless" if _TURSO_CONFIGURED else "sqlite-local"
 
 
 class CompatRow:
@@ -200,11 +203,13 @@ class RemoteConnection:
 
 def database_status(deep=False):
     result = {
-        "mode": "turso-serverless" if _TURSO_CONFIGURED else "sqlite-local",
-        "persistent": bool(_TURSO_CONFIGURED),
+        "mode": _LAST_DB_MODE,
+        "persistent": bool(_LAST_DB_MODE == "turso-serverless"),
         "render": bool(os.environ.get("RENDER")),
         "remote_configured": bool(_TURSO_CONFIGURED),
         "partial_configuration": bool(_TURSO_PARTIAL_CONFIG),
+        "fallback_active": bool(_LAST_DB_MODE.startswith("sqlite-fallback")),
+        "last_error": _LAST_DB_ERROR,
         "local_path": str(DB_PATH) if not _TURSO_CONFIGURED else None,
     }
     if _TURSO_URL:
@@ -230,33 +235,54 @@ def database_status(deep=False):
     return result
 
 
-def connect():
-    if _TURSO_PARTIAL_CONFIG:
-        raise RuntimeError(
-            "Turso configuration is incomplete. Set both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN."
-        )
 
-    if _TURSO_CONFIGURED:
-        try:
-            import turso_serverless
-        except Exception as exc:
-            raise RuntimeError(
-                "turso_serverless is required. Run pip install turso_serverless."
-            ) from exc
-        try:
-            raw = turso_serverless.connect(
-                _TURSO_URL,
-                auth_token=_TURSO_TOKEN,
-            )
-            return RemoteConnection(raw)
-        except Exception as exc:
-            raise RuntimeError(f"Could not connect PICK to Turso Cloud: {exc}") from exc
-
-    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+def _local_sqlite_connect():
+    path = Path(DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
+
+
+def connect():
+    global _LAST_DB_ERROR, _LAST_DB_MODE
+
+    if _TURSO_PARTIAL_CONFIG:
+        _LAST_DB_ERROR = (
+            "Turso environment is incomplete. "
+            "Both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required. "
+            "Using temporary local SQLite fallback."
+        )
+        _LAST_DB_MODE = "sqlite-fallback-partial-turso"
+        return _local_sqlite_connect()
+
+    if _TURSO_CONFIGURED:
+        try:
+            import turso_serverless
+            raw = turso_serverless.connect(
+                _TURSO_URL,
+                auth_token=_TURSO_TOKEN,
+            )
+            wrapped = RemoteConnection(raw)
+            wrapped.execute("SELECT 1").fetchone()
+            _LAST_DB_ERROR = ""
+            _LAST_DB_MODE = "turso-serverless"
+            return wrapped
+        except Exception as exc:
+            _LAST_DB_ERROR = (
+                "Turso connection failed; using temporary local SQLite fallback: "
+                + str(exc)[:400]
+            )
+            _LAST_DB_MODE = "sqlite-fallback-turso-error"
+            return _local_sqlite_connect()
+
+    _LAST_DB_ERROR = ""
+    _LAST_DB_MODE = "sqlite-local"
+    return _local_sqlite_connect()
+
+
 
 
 
@@ -266,7 +292,7 @@ def _columns(conn, table):
 
 def init_db():
     conn = connect()
-    if not _TURSO_CONFIGURED:
+    if isinstance(conn, sqlite3.Connection):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
 

@@ -650,7 +650,15 @@ def api_database_status():
 
 @app.get("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "PICK AI", "mode": "synology-minipc"})
+    dbs = database_status(deep=False)
+    return jsonify({
+        "ok": True,
+        "service": "PICK AI",
+        "mode": "synology-minipc",
+        "database_mode": dbs.get("mode"),
+        "database_persistent": dbs.get("persistent"),
+        "database_fallback": dbs.get("fallback_active", False),
+    })
 
 
 @app.get("/api/system/status")
