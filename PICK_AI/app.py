@@ -71,6 +71,7 @@ from background_jobs import (
 from people_research import is_person_query
 from translation_support import translation_instruction
 from office_generator import detect_office_kind, create_office_file
+from word_chain import handle_word_chain
 from admin_roles import (
     is_admin as role_is_admin,
     is_owner as role_is_owner,
@@ -535,13 +536,21 @@ def process_background_chat_job(job, update_partial, is_cancelled):
     text=str(payload.get("message") or "").strip()
     if not text: raise RuntimeError("저장된 질문이 비어 있습니다.")
     update_partial("답변을 준비하고 있습니다…",meta={"phase":"preparing"})
+    history=get_messages(chat_id)
+
+    word_chain_answer=handle_word_chain(text,history[:-1])
+    if word_chain_answer is not None:
+        if is_cancelled(): raise JobCancelled()
+        return {"answer":word_chain_answer,"stored_answer":word_chain_answer,"sources":[],"model":"PICK-word-chain",
+                "meta":{"route":{"primary":"word_chain"},"web_used":False,"web_kind":None}}
+
     direct=direct_realtime_or_identity_answer(text,payload)
     if direct is not None:
         if is_cancelled(): raise JobCancelled()
         answer,kind=direct
         return {"answer":answer,"stored_answer":answer,"sources":[],"model":"PICK-direct",
                 "meta":{"route":{"primary":kind},"web_used":kind in {"weather","news"},"web_kind":kind if kind in {"weather","news"} else None}}
-    history=get_messages(chat_id); recent=[{"role":m["role"],"content":m["content"]} for m in history[:-1][-16:]]
+    recent=[{"role":m["role"],"content":m["content"]} for m in history[:-1][-16:]]
     orch=orchestrate(text,recent); qa=analyze_question(text,recent); normalized=orch.rewritten_question or qa.normalized or text; route=orch.route
     if orch.clarification:
         a=orch.clarification
