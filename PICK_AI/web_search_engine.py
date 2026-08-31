@@ -130,17 +130,34 @@ def search_wikipedia(query: str, limit: int = 3) -> list[dict[str, str]]:
     return out
 
 
+
+def _is_major_news_request(text: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    explicit = (
+        "주요뉴스", "주요 뉴스", "오늘 뉴스", "오늘뉴스", "헤드라인",
+        "중요 뉴스", "중요한 뉴스", "많이 본 뉴스", "관심 많은 뉴스",
+        "사람들이 관심", "화제 뉴스", "뉴스 요약", "뉴스 정리",
+    )
+    return any(x in value for x in explicit)
+
+
 def _extract_news_query(text: str) -> str:
+    if _is_major_news_request(text):
+        return "대한민국"
+
     value = str(text or "").strip()
     value = re.sub(
         r"(오늘|현재|지금|최신|최근|실시간|뉴스|소식|기사|"
         r"알려\s*주세요|알려주세요|알려\s*줘|알려줘|"
-        r"찾아\s*주세요|찾아주세요|찾아\s*줘|찾아줘|검색)",
+        r"찾아\s*주세요|찾아주세요|찾아\s*줘|찾아줘|검색|"
+        r"핵심만|핵심|정리해\s*주세요|정리해주세요|정리해\s*줘|정리해줘)",
         " ",
         value,
     )
     value = re.sub(r"\s+", " ", value).strip(" ?!.")
     return value or "대한민국"
+
+
 
 
 def _news_recency_suffix(text: str) -> str:
@@ -150,22 +167,89 @@ def _news_recency_suffix(text: str) -> str:
     if any(k in t for k in ("최근", "이번주", "이번 주")):
         return " when:7d"
     return ""
-def search_news(query: str, limit: int = 10) -> list[dict[str, str]]:
-    clean_query = _extract_news_query(query)
-    q = urllib.parse.quote_plus(clean_query + _news_recency_suffix(query))
-    raw = _get(
-        f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
-    )
+
+_MAJOR_NEWS_SOURCE_WEIGHTS = {
+    "kbs": 6.0,
+    "kbs 뉴스": 6.0,
+    "mbc": 6.0,
+    "mbc 뉴스": 6.0,
+    "sbs": 5.8,
+    "sbs 뉴스": 5.8,
+    "연합뉴스": 5.8,
+    "ytn": 5.5,
+    "jtbc": 5.3,
+    "뉴스1": 5.0,
+    "뉴시스": 5.0,
+    "한겨레": 4.5,
+    "경향신문": 4.5,
+    "조선일보": 4.5,
+    "중앙일보": 4.5,
+    "동아일보": 4.5,
+    "한국일보": 4.5,
+    "서울신문": 4.2,
+    "매일경제": 4.2,
+    "한국경제": 4.2,
+}
+
+_MAJOR_NEWS_LOW_VALUE = (
+    "mbti", "엠비티아이", "운세", "오늘의 운세", "별자리",
+    "띠별", "심리테스트", "심리 테스트", "성격테스트", "성격 테스트",
+    "궁합", "혈액형", "로또번호", "로또 번호",
+)
+
+_MAJOR_NEWS_STOPWORDS = {
+    "오늘", "뉴스", "속보", "단독", "영상", "종합", "포토", "기자",
+    "정부", "대한민국", "관련", "대한", "위해", "통해", "이번", "현재",
+    "kbs", "mbc", "sbs", "ytn", "jtbc", "연합뉴스", "뉴스1", "뉴시스",
+}
+
+
+def _news_provider_weight(provider: str) -> float:
+    value = re.sub(r"\s+", " ", str(provider or "").strip().lower())
+    if not value:
+        return 0.0
+    best = 0.0
+    for key, weight in _MAJOR_NEWS_SOURCE_WEIGHTS.items():
+        if key in value:
+            best = max(best, weight)
+    return best
+
+
+def _news_title_tokens(title: str) -> set[str]:
+    value = re.sub(r"\[[^\]]+\]", " ", str(title or "").lower())
+    value = re.sub(r"[^0-9a-z가-힣 ]+", " ", value)
+    words = re.findall(r"[0-9a-z가-힣]{2,}", value)
+    return {
+        w for w in words
+        if w not in _MAJOR_NEWS_STOPWORDS and len(w) >= 2
+    }
+
+
+def _news_similarity(a: str, b: str) -> float:
+    aa = _news_title_tokens(a)
+    bb = _news_title_tokens(b)
+    if not aa or not bb:
+        return 0.0
+    return len(aa & bb) / max(1, min(len(aa), len(bb)))
+
+
+def _parse_google_news_rss(raw: bytes, limit: int = 80) -> list[dict[str, str]]:
     root = ET.fromstring(raw)
     out = []
     for item in root.findall("./channel/item")[:limit]:
         title = (item.findtext("title") or "").strip()
         source = (item.findtext("source") or "").strip()
         published = (item.findtext("pubDate") or "").strip()
+
         if not source and " - " in title:
             maybe_title, maybe_source = title.rsplit(" - ", 1)
             if len(maybe_source) <= 80:
-                title, source = maybe_title.strip(), maybe_source.strip()
+                title = maybe_title.strip()
+                source = maybe_source.strip()
+
+        if not title:
+            continue
+
         out.append({
             "title": title,
             "url": (item.findtext("link") or "").strip(),
@@ -174,6 +258,106 @@ def search_news(query: str, limit: int = 10) -> list[dict[str, str]]:
             "provider": source or "Google News",
         })
     return out
+
+
+def _rank_major_news(rows: list[dict[str, str]], limit: int = 10) -> list[dict[str, str]]:
+    candidates = []
+    for index, row in enumerate(rows):
+        title = str(row.get("title") or "").strip()
+        provider = str(row.get("provider") or "").strip()
+        lower = title.lower()
+
+        if not title or not str(row.get("url") or "").startswith("http"):
+            continue
+
+        if any(term in lower for term in _MAJOR_NEWS_LOW_VALUE):
+            continue
+
+        source_score = _news_provider_weight(provider)
+        position_score = max(0.0, 2.5 - index * 0.025)
+
+        cross_sources = set()
+        for other in rows:
+            if other is row:
+                continue
+            if _news_similarity(title, str(other.get("title") or "")) >= 0.34:
+                other_provider = str(other.get("provider") or "").strip().lower()
+                if other_provider and other_provider != provider.lower():
+                    cross_sources.add(other_provider)
+
+        cross_score = min(9.0, len(cross_sources) * 3.0)
+        score = source_score + position_score + cross_score
+
+        item = dict(row)
+        item["_score"] = score
+        item["_cross_sources"] = len(cross_sources)
+        candidates.append(item)
+
+    candidates.sort(
+        key=lambda r: (
+            float(r.get("_score") or 0),
+            int(r.get("_cross_sources") or 0),
+        ),
+        reverse=True,
+    )
+
+    selected = []
+    provider_counts = {}
+
+    for row in candidates:
+        provider_key = str(row.get("provider") or "Google News").strip().lower()
+        if provider_counts.get(provider_key, 0) >= 2:
+            continue
+
+        if any(
+            _news_similarity(str(row.get("title") or ""), str(old.get("title") or "")) >= 0.58
+            for old in selected
+        ):
+            continue
+
+        clean = {
+            key: value for key, value in row.items()
+            if not key.startswith("_")
+        }
+        clean["source_type"] = "news"
+        selected.append(clean)
+        provider_counts[provider_key] = provider_counts.get(provider_key, 0) + 1
+
+        if len(selected) >= limit:
+            break
+
+    return selected
+
+
+def _search_major_news(limit: int = 10) -> list[dict[str, str]]:
+    raw = _get(
+        "https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko",
+        timeout=min(4.0, max(2.0, TIMEOUT + 0.7)),
+        retries=0,
+    )
+    rows = _parse_google_news_rss(raw, 80)
+    return _rank_major_news(rows, limit)
+
+
+
+def search_news(query: str, limit: int = 10) -> list[dict[str, str]]:
+    if _is_major_news_request(query):
+        try:
+            rows = _search_major_news(limit)
+            if rows:
+                return rows
+        except Exception:
+            pass
+
+    clean_query = _extract_news_query(query)
+    q = urllib.parse.quote_plus(clean_query + _news_recency_suffix(query))
+    raw = _get(
+        f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+    )
+    rows = _parse_google_news_rss(raw, max(limit * 2, 20))
+    return rows[:limit]
+
+
 
 def search_youtube(query: str, limit: int = 5) -> list[dict[str, str]]:
     rows = search_duckduckgo(f"site:youtube.com/watch {query}", limit + 5)
