@@ -76,7 +76,9 @@ from admin_roles import (
     is_admin as role_is_admin,
     is_owner as role_is_owner,
     admin_label as role_admin_label,
+    can_manage_roles as role_can_manage_roles,
     list_users_for_admin, promote_admin, demote_admin,
+    ensure_subadmin_account,
 )
 import migrations
 
@@ -146,6 +148,34 @@ def pick_security_before_request():
     validate_csrf()
 
 
+@app.before_request
+def pick_persistent_storage_guard():
+    if not persistent_storage_required():
+        return None
+
+    # If Turso is unavailable, do not make user history look empty.
+    if request.method == "GET" and request.path == "/api/bootstrap":
+        return persistent_storage_error_response()
+
+    # Never silently write user/admin state into Render's temporary filesystem.
+    protected_prefixes = (
+        "/api/chat",
+        "/api/settings",
+        "/api/memory",
+        "/api/memories",
+        "/api/learning",
+        "/api/account",
+        "/api/admin",
+    )
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and request.path.startswith(protected_prefixes)
+    ):
+        return persistent_storage_error_response()
+
+    return None
+
+
 @app.after_request
 def pick_security_headers(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -206,6 +236,50 @@ def current_user_is_owner():
 
 def current_admin_label():
     return role_admin_label(session.get("user_id"))
+
+
+def current_user_can_manage_roles():
+    return role_can_manage_roles(session.get("user_id"))
+
+
+def persistent_storage_required():
+    return (
+        bool(os.environ.get("RENDER"))
+        and str(os.environ.get("PICK_REQUIRE_PERSISTENT_DB", "1")).strip().lower()
+        not in {"0", "false", "off", "no"}
+    )
+
+
+def persistent_storage_ready():
+    if not persistent_storage_required():
+        return True, database_status(deep=False)
+    status = database_status(deep=True)
+    return bool(status.get("persistent") and status.get("reachable")), status
+
+
+def persistent_storage_error_response():
+    ready, status = persistent_storage_ready()
+    if ready:
+        return None
+    return jsonify({
+        "ok": False,
+        "error": (
+            "영구 데이터베이스 연결이 확인되지 않았습니다. "
+            "기록 손실 방지를 위해 임시 SQLite 저장을 사용하지 않습니다. "
+            "TURSO_DATABASE_URL과 TURSO_AUTH_TOKEN을 확인해 주세요."
+        ),
+        "database": status,
+    }), 503
+
+
+def audit_preview(value, limit=300):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(
+        r"(?i)(password|passwd|token|secret|api[_ -]?key)\s*[:=]\s*\S+",
+        r"\1=[REDACTED]",
+        text,
+    )
+    return text[:limit]
 
 
 def user_owns_chat(chat_id, user_id):
@@ -602,7 +676,26 @@ def after_background_chat_job(job,result,message_id):
     try: refresh_summary_if_needed(int(job["user_id"]),int(job["chat_id"]),get_messages(int(job["chat_id"])),summarizer=None)
     except Exception as e: log("WARNING",f"background summary refresh: {e}")
 
-init_db(); ensure_job_table(); start_background_worker(process_background_chat_job,after_complete=after_background_chat_job)
+init_db()
+SUBADMIN_BOOTSTRAP_STATUS = {"ok": False, "configured": False}
+try:
+    _subadmin_db_ready, _subadmin_db_status = persistent_storage_ready()
+    if _subadmin_db_ready:
+        SUBADMIN_BOOTSTRAP_STATUS = ensure_subadmin_account()
+    else:
+        SUBADMIN_BOOTSTRAP_STATUS = {
+            "ok": False,
+            "configured": False,
+            "reason": "persistent_database_unavailable",
+        }
+except Exception as _subadmin_exc:
+    log("WARNING", f"subadmin bootstrap: {_subadmin_exc}")
+
+ensure_job_table()
+start_background_worker(
+    process_background_chat_job,
+    after_complete=after_background_chat_job,
+)
 
 
 @app.errorhandler(403)
@@ -952,7 +1045,7 @@ def api_admin_users():
     if auth_err: return auth_err
     if not current_user_is_admin():
         return jsonify({"ok":False,"error":"관리자만 접근할 수 있습니다."}),403
-    return jsonify({"ok":True,"admin_label":current_admin_label(),"users":list_users_for_admin(session["user_id"])})
+    return jsonify({"ok":True,"admin_label":current_admin_label(),"can_manage_roles":current_user_can_manage_roles(),"users":list_users_for_admin(session["user_id"])})
 
 
 @app.post("/api/admin/users/<int:target_id>/promote")
@@ -1436,6 +1529,13 @@ def api_chat_background(chat_id):
     try: maybe_auto_store(uid,chat_id,text)
     except Exception as e: log("WARNING",f"background memory auto-store: {e}")
     job=enqueue_background_job(uid,chat_id,mid,payload)
+    write_audit(
+        "chat.question",
+        user_id=uid,
+        username=session.get("username"),
+        detail=f"chat_id={chat_id}; message_id={mid}; preview={audit_preview(text)}",
+        ip_hint=request.remote_addr or "",
+    )
     return jsonify({"ok":True,"accepted":True,"job":job,"messages":get_messages(chat_id),"chats":get_chats(uid)}),202
 
 @app.get("/api/jobs/<int:job_id>")
@@ -1684,6 +1784,13 @@ def api_chat_new():
     if auth_err:
         return auth_err
     chat_id = create_chat(session["user_id"])
+    write_audit(
+        "chat.create",
+        user_id=session["user_id"],
+        username=session.get("username"),
+        detail=f"chat_id={chat_id}",
+        ip_hint=request.remote_addr or "",
+    )
     return jsonify({
         "ok": True,
         "chat_id": chat_id,
@@ -1737,6 +1844,13 @@ def api_chat_delete(chat_id):
     conn.execute("DELETE FROM chats WHERE id=? AND user_id=?", (chat_id, uid))
     conn.commit()
     conn.close()
+    write_audit(
+        "chat.delete",
+        user_id=uid,
+        username=session.get("username"),
+        detail=f"chat_id={chat_id}",
+        ip_hint=request.remote_addr or "",
+    )
     return jsonify({"ok": True, "chats": get_chats(uid)})
 
 
@@ -2054,6 +2168,18 @@ def login():
 
 @app.get("/logout")
 def logout():
+    uid = session.get("user_id")
+    username = session.get("username")
+    if uid:
+        try:
+            write_audit(
+                "account.logout",
+                user_id=uid,
+                username=username,
+                ip_hint=request.remote_addr or "",
+            )
+        except Exception:
+            pass
     session.clear()
     return redirect(url_for("login"))
 
@@ -2086,8 +2212,13 @@ def admin_status():
     users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
     chats = conn.execute("SELECT COUNT(*) c FROM chats").fetchone()["c"]
     messages = conn.execute("SELECT COUNT(*) c FROM chat_messages").fetchone()["c"]
-    logs = conn.execute(
-        "SELECT level,message,created_at FROM service_logs ORDER BY id DESC LIMIT 50"
+    audit_logs = conn.execute(
+        "SELECT id,user_id,username,event,detail,ip_hint,created_at "
+        "FROM audit_events ORDER BY id DESC LIMIT 200"
+    ).fetchall()
+    service_logs = conn.execute(
+        "SELECT level,message,created_at FROM service_logs "
+        "ORDER BY id DESC LIMIT 50"
     ).fetchall()
     conn.close()
 
@@ -2103,11 +2234,17 @@ def admin_status():
         users=users,
         convs=chats,
         msgs=messages,
-        logs=logs,
+        audit_logs=audit_logs,
+        service_logs=service_logs,
         ollama_ok=ollama_ok,
         models=models,
-        admin_label=current_admin_label()
+        admin_label=current_admin_label(),
+        can_manage_roles=current_user_can_manage_roles(),
+        db_status=database_status(deep=False),
+        subadmin_status=SUBADMIN_BOOTSTRAP_STATUS,
     )
+
+
 
 
 init_db()
