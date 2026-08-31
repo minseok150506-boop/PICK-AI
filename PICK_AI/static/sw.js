@@ -1,4 +1,4 @@
-const CACHE = 'pick-ai-recovery-v3';
+const CACHE = 'pick-ai-question-v1011';
 const SHELL = ['/static/style.css','/static/app.js','/static/manifest.webmanifest'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

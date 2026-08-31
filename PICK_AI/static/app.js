@@ -115,23 +115,32 @@ function responseIsActive() {
   return Boolean(state.sending || getActiveBackgroundJob());
 }
 
+function composerAction(active, text) {
+  const hasText = Boolean(String(text || "").trim());
+  if (hasText) return "send";
+  if (active) return "stop";
+  return "disabled";
+}
+
 function updateSendButtons() {
   const h = $("homeSendBtn");
   const s = $("sendBtn");
   const active = responseIsActive();
 
   if (h) {
-    h.disabled = active ? false : !$("homeInput")?.value.trim();
-    h.textContent = active ? "■" : "↑";
-    h.setAttribute("aria-label", active ? "답변 중지" : "전송");
-    h.title = active ? "답변 중지" : "전송";
+    const action = composerAction(active, $("homeInput")?.value || "");
+    h.disabled = action === "disabled";
+    h.textContent = action === "stop" ? "■" : "↑";
+    h.setAttribute("aria-label", action === "stop" ? "답변 중지" : "전송");
+    h.title = action === "stop" ? "답변 중지" : "전송";
   }
 
   if (s) {
-    s.disabled = active ? false : !$("messageInput")?.value.trim();
-    s.textContent = active ? "■" : "↑";
-    s.setAttribute("aria-label", active ? "답변 중지" : "전송");
-    s.title = active ? "답변 중지" : "전송";
+    const action = composerAction(active, $("messageInput")?.value || "");
+    s.disabled = action === "disabled";
+    s.textContent = action === "stop" ? "■" : "↑";
+    s.setAttribute("aria-label", action === "stop" ? "답변 중지" : "전송");
+    s.title = action === "stop" ? "답변 중지" : "전송";
   }
 }
 
@@ -573,11 +582,19 @@ function buildFollowUps(query) {
 
 async function sendTextStreaming(text) {
   const clean = String(text || "").trim();
-  if (!clean) return;
-  if (getActiveBackgroundJob() || state.sending) {
-    await stopCurrentResponse();
+
+  if (!clean) {
+    if (responseIsActive()) await stopCurrentResponse();
     return;
   }
+
+  // New questions are allowed while another answer is running.
+  // The server background queue processes them in FIFO order.
+  if (state.sending) {
+    showToast("질문을 전송 중입니다. 다시 눌러 주세요.");
+    return;
+  }
+
   if (!state.currentChatId) await createChat();
   const chatId = Number(state.currentChatId);
   state.sending = true;
@@ -1410,8 +1427,18 @@ document.addEventListener("click", async event => {
 // Direct listeners: bind only if the element exists.
 $("newChatBtn")?.addEventListener("click", startNewChatView);
 $("topNewChatBtn")?.addEventListener("click", startNewChatView);
-$("homeSendBtn")?.addEventListener("click", () => responseIsActive() ? stopCurrentResponse() : sendFromHome());
-$("sendBtn")?.addEventListener("click", () => responseIsActive() ? stopCurrentResponse() : sendTextStreaming($("messageInput")?.value || ""));
+$("homeSendBtn")?.addEventListener("click", () => {
+  const text = $("homeInput")?.value || "";
+  const action = composerAction(responseIsActive(), text);
+  if (action === "send") return sendFromHome();
+  if (action === "stop") return stopCurrentResponse();
+});
+$("sendBtn")?.addEventListener("click", () => {
+  const text = $("messageInput")?.value || "";
+  const action = composerAction(responseIsActive(), text);
+  if (action === "send") return sendTextStreaming(text);
+  if (action === "stop") return stopCurrentResponse();
+});
 $("memoryCenterBtn")?.addEventListener("click", openMemoryCenter);
 $("learningBtn")?.addEventListener("click", openLearningCenter);
 $("settingsBtn")?.addEventListener("click", openSettings);
@@ -1461,8 +1488,13 @@ $("manualSearchInput")?.addEventListener("keydown", e => {
     if (e.isComposing) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (responseIsActive()) stopCurrentResponse();
-      else id === "homeInput" ? sendFromHome() : sendTextStreaming($("messageInput")?.value || "");
+      const text = el.value || "";
+      const action = composerAction(responseIsActive(), text);
+      if (action === "send") {
+        id === "homeInput" ? sendFromHome() : sendTextStreaming(text);
+      } else if (action === "stop") {
+        stopCurrentResponse();
+      }
     }
   });
 });
