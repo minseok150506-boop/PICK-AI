@@ -1,14 +1,25 @@
 import sqlite3
 import os
 from pathlib import Path
-from datetime import datetime
+from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 from werkzeug.security import generate_password_hash
 
 from config import DB_PATH, ADMIN_USERNAME, ADMIN_PASSWORD
 
 
+PICK_TIMEZONE = str(os.environ.get("PICK_TIMEZONE") or "Asia/Seoul").strip() or "Asia/Seoul"
+
+
+def _pick_timezone():
+    try:
+        return ZoneInfo(PICK_TIMEZONE)
+    except Exception:
+        return timezone(timedelta(hours=9))
+
+
 def now():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(_pick_timezone()).strftime("%Y-%m-%d %H:%M:%S")
 
 
 _TURSO_URL = str(os.environ.get("TURSO_DATABASE_URL") or "").strip()

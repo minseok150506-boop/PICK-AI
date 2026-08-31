@@ -11,6 +11,8 @@ services:
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
+      - key: PICK_TIMEZONE
+        value: Asia/Seoul
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: SECRET_KEY

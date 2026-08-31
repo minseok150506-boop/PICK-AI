@@ -851,7 +851,7 @@ def api_admin_overview():
       "messages":conn.execute("SELECT COUNT(*) c FROM chat_messages").fetchone()["c"],
       "memories":conn.execute("SELECT COUNT(*) c FROM memories").fetchone()["c"],
       "attachments":conn.execute("SELECT COUNT(*) c FROM attachments").fetchone()["c"],
-      "audit_today":conn.execute("SELECT COUNT(*) c FROM audit_events WHERE date(created_at)=date('now','localtime')").fetchone()["c"],
+      "audit_today":conn.execute("SELECT COUNT(*) c FROM audit_events WHERE substr(created_at,1,10)=?",(now()[:10],)).fetchone()["c"],
     }
     conn.close()
     return jsonify({"ok":True,"counts":counts,"inference":guard.status(),"database":database_status(deep=False),"schema_version":migrations.LATEST_SCHEMA})
