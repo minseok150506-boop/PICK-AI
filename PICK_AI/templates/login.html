@@ -11,7 +11,7 @@ a{color:#c4b5fd}.error{background:rgba(239,68,68,.15);padding:10px;border-radius
 <h1>PICK 로그인</h1>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
-<p style="color:#a1a1aa">회원가입한 계정만 로그인할 수 있습니다. 관리자 계정은 바로 로그인할 수 있습니다.</p>
+<p style="color:#a1a1aa">일반 사용자는 회원가입 후 로그인할 수 있습니다. 관리자·부관리자 계정은 바로 로그인할 수 있습니다.</p>
 <form method="post">
 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
 <input name="username" placeholder="아이디" required>

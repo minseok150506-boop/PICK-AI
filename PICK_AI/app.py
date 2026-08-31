@@ -24,7 +24,7 @@ from config import (
 )
 from database import connect, init_db, log, now, database_status
 from pick_llm import PickLLMRouter, ollama_health, stream_generate, build_prompt
-from security import client_key, csrf_token, limiter, validate_csrf
+from security import attach_csrf_cookie, client_key, csrf_token, limiter, validate_csrf
 from web_tools import build_web_context, format_context
 from web_search_engine import search as web_search, format_for_llm as format_web_search, weather_coords
 from memory_store import add_memory, delete_memory, format_memory_context, list_memories
@@ -178,6 +178,7 @@ def pick_persistent_storage_guard():
 
 @app.after_request
 def pick_security_headers(response):
+    response = attach_csrf_cookie(response)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
