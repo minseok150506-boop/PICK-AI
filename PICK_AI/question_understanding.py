@@ -45,7 +45,13 @@ REFERENCE_WORDS = [
     "이거", "그거", "저거", "이것", "그것", "저것",
     "아까", "전에", "위에", "그 파일", "그 코드", "그 버튼",
     "그 사이트", "그 주소", "그 설정", "그 명령어", "그 모델",
-    "계속", "다음", "그대로", "이대로", "이것도", "그것도", "아까 거", "아까거",
+    "계속", "다음", "그대로", "이대로", "이것도", "그것도",
+    "아까 거", "아까거",
+    "알려줘", "알려 주세요", "말해줘", "말해 주세요",
+    "답해줘", "설명해줘", "그럼", "그러면", "그래서",
+    "왜?", "어떻게?", "더 알려줘", "더 자세히",
+    "내일은", "모레는", "오늘은", "가격은", "이유는",
+    "장점은", "단점은",
 ]
 
 ERROR_HINTS = [
@@ -81,36 +87,45 @@ def normalize_question(text: str) -> str:
     value = str(text or "").strip()
     value = re.sub(r"\s+", " ", value)
 
-    # Apply only conservative corrections. Do not rewrite product names or code.
     lowered = value.lower()
     for wrong, right in COMMON_KO_FIXES.items():
         if wrong in lowered:
-            # preserve casing elsewhere by doing case-insensitive replacement
-            value = re.sub(re.escape(wrong), right, value, flags=re.I)
+            value = re.sub(
+                re.escape(wrong),
+                right,
+                value,
+                flags=re.I
+            )
             lowered = value.lower()
 
-    # In weather/wind context, users often type 풍량 when they mean 풍향 (wind direction).
-    if "풍량" in value and any(k in value for k in ("바람", "날씨", "방향", "몇 도")):
+    if "풍량" in value and any(
+        k in value for k in ("바람", "날씨", "방향", "몇 도")
+    ):
         value = value.replace("풍량", "풍향")
 
-    # Normalize repeated punctuation/spacing without altering code-like content.
     value = re.sub(r"[?]{2,}", "?", value)
     value = re.sub(r"[!]{2,}", "!", value)
     return value.strip()
 
 
 def extract_key_terms(text: str) -> list[str]:
-    # Keep technical identifiers intact where possible.
     tokens = re.findall(
-        r"[A-Za-z][A-Za-z0-9_.:+#/-]{1,}|[가-힣]{2,}|[\u4e00-\u9fff]{2,}|[\u3040-\u30ff]{2,}",
+        r"[A-Za-z][A-Za-z0-9_.:+#/-]{1,}|"
+        r"[가-힣]{2,}|"
+        r"[\u4e00-\u9fff]{2,}|"
+        r"[\u3040-\u30ff]{2,}",
         text
     )
+
     stop = {
-        "이거", "그거", "저거", "해줘", "해주세요", "알려줘", "어떻게",
-        "무엇인가요", "왜", "그리고", "근데", "그런데", "가능",
+        "이거", "그거", "저거", "해줘", "해주세요",
+        "알려줘", "어떻게", "무엇인가요", "왜",
+        "그리고", "근데", "그런데", "가능",
     }
+
     out = []
     seen = set()
+
     for token in tokens:
         if token.lower() in stop or token in stop:
             continue
@@ -120,18 +135,42 @@ def extract_key_terms(text: str) -> list[str]:
             out.append(token)
         if len(out) >= 12:
             break
+
     return out
 
 
 def classify_intent(text: str) -> str:
     t = text.lower()
 
-    if any(x in t for x in ["우편번호", "zipcode", "zip code", "postal code"]):
+    if any(
+        x in t
+        for x in ["우편번호", "zipcode", "zip code", "postal code"]
+    ):
         return "postal"
-    if any(x in t for x in ["네비", "내비", "내비게이션", "길찾기", "이동 시간", "도착 시간"]) or ("까지" in t and any(x in t for x in ["몇 분", "몇분", "차로", "도보", "걸어서", "자전거"])):
+
+    if any(
+        x in t
+        for x in [
+            "네비", "내비", "내비게이션",
+            "길찾기", "이동 시간", "도착 시간"
+        ]
+    ) or (
+        "까지" in t
+        and any(
+            x in t
+            for x in ["몇 분", "몇분", "차로", "도보", "걸어서", "자전거"]
+        )
+    ):
         return "navigation"
-    if any(x in t for x in ["ppt", "pptx", "파워포인트", "프레젠테이션", "엑셀", "xlsx", "워드", "docx"]):
-        if any(x in t for x in ["만들", "생성", "작성", "제작", "파일로"]):
+
+    if any(
+        x in t
+        for x in ["ppt", "pptx", "파워포인트", "프레젠테이션", "엑셀", "xlsx", "워드", "docx"]
+    ):
+        if any(
+            x in t
+            for x in ["만들", "생성", "작성", "제작", "파일로"]
+        ):
             return "office_file"
 
     if is_coding_query(text):
@@ -141,36 +180,59 @@ def classify_intent(text: str) -> str:
             return "write_code"
         return "coding"
 
-    if any(x in t for x in [
-        "누구야", "누구예요", "누구에요", "누구인가", "누구지", "누구인지",
-        "어떤 사람이야", "어떤 사람인가", "어떤 인물이야", "who is"
-    ]):
+    if any(
+        x in t
+        for x in [
+            "누구야", "누구예요", "누구에요", "누구인가",
+            "누구지", "누구인지", "어떤 사람이야",
+            "어떤 사람인가", "어떤 인물이야", "who is"
+        ]
+    ):
         return "person_research"
 
-    if any(x in t for x in ["몇 시", "몇시", "현재 시간", "지금 시간", "시간 알려", "오늘 날짜", "무슨 요일"]):
+    if any(
+        x in t
+        for x in [
+            "몇 시", "몇시", "현재 시간", "지금 시간",
+            "시간 알려", "오늘 날짜", "무슨 요일"
+        ]
+    ):
         return "time"
+
     if any(x in t for x in ["날씨", "기온", "온도"]):
         return "weather"
+
     if "뉴스" in t:
         return "news"
+
     if "유튜브" in t or "youtube" in t:
         return "youtube"
+
     if any(x in t for x in ["가격", "파는", "판매", "재고", "구매"]):
         return "shopping_search"
+
     if any(x in t for x in ["에러", "오류", "안 돼", "안됨", "실패"]):
         return "troubleshoot"
+
     if any(x in t for x in ["번역", "translate"]):
         return "translate"
+
     if any(x in t for x in ["요약", "정리"]):
         return "summarize"
+
     if any(x in t for x in ["만들어", "해줘", "해 줘", "작성"]):
         return "create_or_modify"
+
     if any(x in t for x in QUESTION_HINTS):
         return "question"
+
     return "conversation"
 
 
-def analyze_question(text: str, history: list[dict] | None = None) -> QuestionAnalysis:
+def analyze_question(
+    text: str,
+    history: list[dict] | None = None
+) -> QuestionAnalysis:
     history = history or []
     original = str(text or "").strip()
     normalized = normalize_question(original)
@@ -184,7 +246,6 @@ def analyze_question(text: str, history: list[dict] | None = None) -> QuestionAn
     ambiguity = 0
     reasons = []
 
-    # Very short context-dependent utterances are ambiguous only if history cannot resolve them.
     if len(normalized) <= 6:
         ambiguity += 2
         reasons.append("질문이 매우 짧습니다.")
@@ -193,30 +254,47 @@ def analyze_question(text: str, history: list[dict] | None = None) -> QuestionAn
         ambiguity += 2
         reasons.append("이전 대상을 가리키는 표현이 있습니다.")
 
-    # Error reports without any technical anchor may need clarification.
     terms = extract_key_terms(normalized)
     if error_report and not terms:
         ambiguity += 2
         reasons.append("오류 대상이나 오류 메시지가 없습니다.")
 
-    # If there is recent context, lower ambiguity for references/short followups.
     recent = history[-6:]
     if recent:
-        context_text = " ".join(str(m.get("content", "")) for m in recent)
+        context_text = " ".join(
+            str(m.get("content", ""))
+            for m in recent
+        )
+
         if refers or len(normalized) <= 6:
             if len(context_text.strip()) > 20:
                 ambiguity = max(0, ambiguity - 2)
-                reasons.append("최근 대화 문맥으로 일부 보완 가능합니다.")
+                reasons.append(
+                    "최근 대화 문맥으로 일부 보완 가능합니다."
+                )
 
     followup_phrases = {
-        "해줘", "해 줘", "그렇게 해줘", "그렇게 해 줘", "계속", "계속해줘",
-        "다음", "그대로", "이대로", "그거", "그것도", "이것도", "아까 거", "아까거",
+        "해줘", "해 줘", "그렇게 해줘", "그렇게 해 줘",
+        "계속", "계속해줘", "다음", "그대로", "이대로",
+        "그거", "그것도", "이것도", "아까 거", "아까거",
+        "알려줘", "알려 주세요", "알려주세요",
+        "말해줘", "말해 주세요", "답해줘", "설명해줘",
+        "더 알려줘", "더 자세히", "자세히",
+        "왜", "왜?", "어떻게", "어떻게?",
+        "그럼", "그럼?", "그러면", "그래서",
+        "내일은", "내일은?", "모레는", "모레는?",
     }
+
     if normalized in followup_phrases and recent:
         ambiguity = 0
 
     detected_intent = classify_intent(normalized)
-    if detected_intent in {"weather", "time", "news", "coding", "write_code", "debug_code", "translate", "summarize", "postal", "navigation", "office_file"}:
+    if detected_intent in {
+        "weather", "time", "news",
+        "coding", "write_code", "debug_code",
+        "translate", "summarize", "postal",
+        "navigation", "office_file",
+    }:
         ambiguity = max(0, ambiguity - 2)
 
     should_clarify = ambiguity >= 3
@@ -236,8 +314,15 @@ def analyze_question(text: str, history: list[dict] | None = None) -> QuestionAn
     )
 
 
-def build_understanding_instruction(analysis: QuestionAnalysis) -> str:
-    terms = ", ".join(analysis.key_terms) if analysis.key_terms else "없음"
+def build_understanding_instruction(
+    analysis: QuestionAnalysis
+) -> str:
+    terms = (
+        ", ".join(analysis.key_terms)
+        if analysis.key_terms
+        else "없음"
+    )
+
     return f"""[Question understanding]
 Original user message: {analysis.original}
 Normalized meaning: {analysis.normalized}
@@ -253,6 +338,9 @@ Response rules:
 - Use recent conversation context to resolve phrases like "this", "that", or "do it".
 - Do not rename product names, model names, filenames, code identifiers, URLs, or error messages.
 - Do not ask a follow-up question when the answer can reasonably be inferred from the recent conversation.
+- For short follow-ups such as "알려줘", "왜?", "그럼?", "더 자세히", infer the omitted subject from the recent conversation and answer it directly.
+- If the user asks what is needed, what should be improved, or asks for recommendations, provide concrete suggestions instead of asking the same question back.
+- Do not restart with a greeting on every turn; greet only when the user is greeting or a greeting is naturally needed.
 - Ask one concise clarification only when a missing fact materially prevents a correct answer.
 - If the user reports an error, prioritize the exact error text and the most recent relevant configuration.
 - If current information is required, use web results and do not guess.
