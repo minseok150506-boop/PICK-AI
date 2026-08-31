@@ -753,8 +753,3 @@ button, a, input, textarea, select {
     z-index: 1000;
   }
 }
-
-.pick-attachments{display:grid;gap:10px;margin-top:10px;max-width:720px}
-.pick-image-attachment{margin:0;overflow:hidden;border:1px solid var(--border);border-radius:14px;background:var(--panel)}
-.pick-image-attachment img{display:block;width:100%;max-height:520px;object-fit:contain;background:#111}
-.pick-image-attachment figcaption{padding:8px 10px;font-size:12px;color:var(--muted)}

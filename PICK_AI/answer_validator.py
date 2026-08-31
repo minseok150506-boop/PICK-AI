@@ -15,7 +15,7 @@ class ValidationResult:
         return asdict(self)
 
 
-def validate_answer(answer: str, *, web_used=False, coding=False, allow_attachment_claim=False) -> ValidationResult:
+def validate_answer(answer: str, *, web_used=False, coding=False) -> ValidationResult:
     text = str(answer or "").strip()
     warnings = []
 
@@ -32,16 +32,6 @@ def validate_answer(answer: str, *, web_used=False, coding=False, allow_attachme
         if marker.lower() in text.lower():
             warnings.append(f"internal-marker:{marker}")
             text = re.sub(re.escape(marker), "", text, flags=re.I)
-
-    if not allow_attachment_claim:
-        patterns = [
-            r"(이미지|사진|그림)(를|을)?\s*(실제로\s*)?첨부(했습니다|했어요|해\s*드렸습니다|해두었습니다|해뒀습니다)",
-            r"(이미지|사진|그림)(를|을)?\s*(생성|제작)(했습니다|했어요|해\s*드렸습니다)",
-        ]
-        if any(re.search(p, text, re.I) for p in patterns):
-            warnings.append("false-attachment-claim")
-            for p in patterns:
-                text = re.sub(p, "현재 답변에는 실제 이미지 첨부가 없습니다", text, flags=re.I)
 
     if web_used and not re.search(r"(출처|source|http[s]?://)", text, re.I):
         warnings.append("web-answer-without-visible-source")

@@ -290,24 +290,6 @@ function renderSourceBundle(sources) {
     </details>`;
 }
 
-function renderAttachmentBundle(rows) {
-  rows = Array.isArray(rows) ? rows : [];
-  if (!rows.length) return "";
-  return `<div class="pick-attachments">${rows.map(a => {
-    const url = String(a?.file_url || "");
-    if (!/^\/api\/attachments\/\d+\/file$/.test(url)) return "";
-    const name = escapeHtml(a?.original_name || "image");
-    if (!a?.is_image) return "";
-    return `<figure class="pick-image-attachment">
-      <a href="${url}" target="_blank" rel="noopener">
-        <img src="${url}" alt="${name}" loading="lazy">
-      </a>
-      <figcaption>${name}</figcaption>
-    </figure>`;
-  }).join("")}</div>`;
-}
-
-
 function renderMessages(scroll = true) {
   const box = $("messageArea");
   if (!box) return;
@@ -323,7 +305,6 @@ function renderMessages(scroll = true) {
         ${assistant ? '<div class="assistant-avatar">P</div>' : ""}
         <div class="message-body">
           <div class="message-content">${assistant ? markdown(m.content) : escapeHtml(m.content)}</div>
-          ${assistant ? renderAttachmentBundle(m.attachments) : ""}
           ${assistant ? renderSourceBundle(m.sources) : ""}
           ${assistant ? `
           <div class="message-actions">
