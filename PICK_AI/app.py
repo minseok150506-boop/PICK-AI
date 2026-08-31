@@ -1,6 +1,7 @@
 import os
 import base64
 import json
+import mimetypes
 import re
 import sqlite3
 from datetime import timedelta
@@ -481,6 +482,34 @@ def _strip_source_marker(content):
     return value[:match.start()].rstrip(), sources
 
 
+_ATTACHMENT_MARKER_RE = re.compile(r"\n*\[\[PICK_ATTACHMENT_ID:(\d+)\]\]\s*$")
+
+
+def _strip_attachment_marker(content):
+    value = str(content or "")
+    match = _ATTACHMENT_MARKER_RE.search(value)
+    if not match:
+        return value, None
+    return value[:match.start()].rstrip(), int(match.group(1))
+
+
+def _attachment_public_row(chat_id, attachment_id):
+    if not attachment_id:
+        return None
+    conn = connect()
+    row = conn.execute(
+        "SELECT id,original_name,kind,mime_type,size_bytes FROM attachments WHERE id=? AND chat_id=?",
+        (int(attachment_id), int(chat_id))
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    item = dict(row)
+    item["file_url"] = f"/api/attachments/{int(attachment_id)}/file"
+    item["is_image"] = str(item.get("mime_type") or "").startswith("image/")
+    return item
+
+
 def get_messages(chat_id):
     conn = connect()
     rows = conn.execute(
@@ -495,9 +524,14 @@ def get_messages(chat_id):
             item["role"] = "assistant"
         if item["role"] == "assistant":
             clean_content, source_rows = _strip_source_marker(item.get("content"))
+            clean_content, attachment_id = _strip_attachment_marker(clean_content)
             item["content"] = clean_content
             if source_rows:
                 item["sources"] = source_rows
+            if attachment_id:
+                attachment = _attachment_public_row(chat_id, attachment_id)
+                if attachment:
+                    item["attachments"] = [attachment]
         result.append(item)
     return result
 
@@ -1365,6 +1399,30 @@ def api_chat_export(chat_id):
     )
 
 
+@app.get("/api/attachments/<int:attachment_id>/file")
+def api_attachment_file(attachment_id):
+    auth_err = require_login_json()
+    if auth_err:
+        return auth_err
+    uid = session["user_id"]
+    if not assert_attachment_owner(attachment_id, uid):
+        return jsonify({"ok":False,"error":"첨부파일을 찾을 수 없습니다."}),404
+    conn = connect()
+    row = conn.execute(
+        "SELECT original_name,mime_type,data_b64 FROM attachments WHERE id=? AND user_id=?",
+        (attachment_id, uid)
+    ).fetchone()
+    conn.close()
+    if not row or not str(row["data_b64"] or ""):
+        return jsonify({"ok":False,"error":"실제 이미지 데이터가 없습니다."}),404
+    try:
+        raw = base64.b64decode(str(row["data_b64"]).encode("ascii"), validate=True)
+    except Exception:
+        return jsonify({"ok":False,"error":"저장된 이미지 데이터가 손상되었습니다."}),500
+    mime = str(row["mime_type"] or "application/octet-stream")
+    return Response(raw, mimetype=mime, headers={"Cache-Control":"private, max-age=3600"})
+
+
 @app.post("/api/chat/<int:chat_id>/attachment")
 def api_chat_attachment(chat_id):
     auth_err = require_login_json()
@@ -1380,6 +1438,21 @@ def api_chat_attachment(chat_id):
     suffix = Path(f.filename or "").suffix.lower()
     attachment_mode = str(request.args.get("mode") or "analysis").strip().lower()
     target_language = str(request.args.get("target_language") or "한국어").strip()[:50] or "한국어"
+
+    raw_image_bytes = b""
+    image_mime_type = str(
+        getattr(f, "mimetype", "")
+        or mimetypes.guess_type(f.filename or "")[0]
+        or ""
+    )
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+        raw_image_bytes = f.read()
+        if len(raw_image_bytes) > 4 * 1024 * 1024:
+            return jsonify({"ok":False,"error":"이미지는 4MB 이하만 실제 첨부로 저장할 수 있습니다."}),400
+        try:
+            f.stream.seek(0)
+        except Exception:
+            pass
     try:
         if suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
             if attachment_mode == "translate":
@@ -1400,13 +1473,25 @@ def api_chat_attachment(chat_id):
     summary = result.get("analysis") if isinstance(result, dict) else str(result)
     summary = str(summary or "")
     conn = connect()
-    conn.execute(
-        "INSERT INTO attachments(chat_id,user_id,original_name,stored_name,kind,summary,created_at) VALUES(?,?,?,?,?,?,?)",
-        (chat_id, uid, str(f.filename or "file"), "", kind, summary[:12000], now())
-    )
+    if raw_image_bytes:
+        encoded = base64.b64encode(raw_image_bytes).decode("ascii")
+        cur = conn.execute(
+            "INSERT INTO attachments(chat_id,user_id,original_name,stored_name,kind,summary,created_at,mime_type,data_b64,size_bytes) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (chat_id, uid, str(f.filename or "image"), "database", kind, summary[:12000], now(),
+             image_mime_type or "image/jpeg", encoded, len(raw_image_bytes))
+        )
+    else:
+        cur = conn.execute(
+            "INSERT INTO attachments(chat_id,user_id,original_name,stored_name,kind,summary,created_at) VALUES(?,?,?,?,?,?,?)",
+            (chat_id, uid, str(f.filename or "file"), "", kind, summary[:12000], now())
+        )
+    attachment_id = int(cur.lastrowid)
+    message_text = f"[{kind} 분석]\n{summary}"
+    if raw_image_bytes:
+        message_text += f"\n\n[[PICK_ATTACHMENT_ID:{attachment_id}]]"
     conn.execute(
         "INSERT INTO chat_messages(chat_id,role,content,created_at) VALUES(?,?,?,?)",
-        (chat_id, "assistant", f"[{kind} 분석]\n{summary}", now())
+        (chat_id, "assistant", message_text, now())
     )
     conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (now(), chat_id))
     conn.commit()

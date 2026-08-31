@@ -441,6 +441,17 @@ def init_db():
         conn.execute("ALTER TABLE attachments ADD COLUMN created_at TEXT")
         conn.execute("UPDATE attachments SET created_at=? WHERE created_at IS NULL", (now(),))
 
+    attachment_cols = _columns(conn, "attachments")
+    if "mime_type" not in attachment_cols:
+        conn.execute("ALTER TABLE attachments ADD COLUMN mime_type TEXT")
+    if "data_b64" not in attachment_cols:
+        conn.execute("ALTER TABLE attachments ADD COLUMN data_b64 TEXT")
+    if "size_bytes" not in attachment_cols:
+        conn.execute("ALTER TABLE attachments ADD COLUMN size_bytes INTEGER DEFAULT 0")
+    conn.execute("UPDATE attachments SET mime_type='' WHERE mime_type IS NULL")
+    conn.execute("UPDATE attachments SET data_b64='' WHERE data_b64 IS NULL")
+    conn.execute("UPDATE attachments SET size_bytes=0 WHERE size_bytes IS NULL")
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_user ON attachments(user_id, id)")
 
     # Admin account is always available without signup.
