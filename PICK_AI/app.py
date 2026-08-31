@@ -677,7 +677,69 @@ def after_background_chat_job(job,result,message_id):
     try: refresh_summary_if_needed(int(job["user_id"]),int(job["chat_id"]),get_messages(int(job["chat_id"])),summarizer=None)
     except Exception as e: log("WARNING",f"background summary refresh: {e}")
 
+
+def migrate_legacy_log_times_to_kst():
+    marker = "legacy_log_times_kst_v1"
+    cutoff = "2026-08-31 22:00:00"
+    conn = connect()
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)"
+        )
+        done = conn.execute(
+            "SELECT value FROM schema_meta WHERE key=?",
+            (marker,),
+        ).fetchone()
+        if done:
+            return {"ok": True, "already_done": True}
+
+        audit_count = 0
+        service_count = 0
+
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM audit_events WHERE created_at < ?",
+            (cutoff,),
+        ).fetchone()
+        audit_count = int(row["c"]) if row else 0
+        conn.execute(
+            "UPDATE audit_events SET created_at=datetime(created_at,'+9 hours') WHERE created_at < ?",
+            (cutoff,),
+        )
+
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM service_logs WHERE created_at < ?",
+            (cutoff,),
+        ).fetchone()
+        service_count = int(row["c"]) if row else 0
+        conn.execute(
+            "UPDATE service_logs SET created_at=datetime(created_at,'+9 hours') WHERE created_at < ?",
+            (cutoff,),
+        )
+
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES(?,?)",
+            (
+                marker,
+                f"done_at={now()};audit={audit_count};service={service_count}",
+            ),
+        )
+        conn.commit()
+        return {
+            "ok": True,
+            "already_done": False,
+            "audit_rows": audit_count,
+            "service_rows": service_count,
+        }
+    finally:
+        conn.close()
+
+
 init_db()
+try:
+    LEGACY_LOG_TIME_MIGRATION_STATUS = migrate_legacy_log_times_to_kst()
+except Exception as _legacy_log_time_exc:
+    LEGACY_LOG_TIME_MIGRATION_STATUS = {"ok": False, "error": str(_legacy_log_time_exc)}
+    log("WARNING", f"legacy log time migration: {_legacy_log_time_exc}")
 SUBADMIN_BOOTSTRAP_STATUS = {"ok": False, "configured": False}
 try:
     _subadmin_db_ready, _subadmin_db_status = persistent_storage_ready()
