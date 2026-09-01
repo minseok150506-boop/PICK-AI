@@ -156,7 +156,7 @@ async function changeRole(id,action){
  if(!confirm("권한을 변경할까요?"))return;
  try{
   await req(`/api/admin/users/${id}/${action}`,{method:"POST"});
-  await loadUsers();
+  location.reload();
  }catch(e){alert(e.message)}
 }
 
