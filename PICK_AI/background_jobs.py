@@ -7,10 +7,19 @@ class JobCancelled(RuntimeError):
 
 _started=False
 _start_lock=threading.Lock()
+_job_table_ready=False
+_job_table_lock=threading.Lock()
+_wake_event=threading.Event()
 
 def ensure_job_table():
-    c=connect()
-    c.executescript("""
+    global _job_table_ready
+    if _job_table_ready:
+        return
+    with _job_table_lock:
+        if _job_table_ready:
+            return
+        c=connect()
+        c.executescript("""
     CREATE TABLE IF NOT EXISTS chat_jobs(
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -38,7 +47,9 @@ def ensure_job_table():
     CREATE INDEX IF NOT EXISTS idx_chat_jobs_status ON chat_jobs(status,id);
     CREATE INDEX IF NOT EXISTS idx_chat_jobs_chat ON chat_jobs(user_id,chat_id,id);
     """)
-    c.commit(); c.close()
+        c.commit()
+        c.close()
+        _job_table_ready=True
 
 def _j(v, fallback):
     try: return json.loads(v or "")
@@ -70,6 +81,7 @@ def enqueue_job(user_id,chat_id,user_message_id,payload):
                   (user_id,chat_id,user_message_id,json.dumps(payload,ensure_ascii=False),"queued",stamp,stamp))
     jid=cur.lastrowid; c.commit()
     r=c.execute("SELECT * FROM chat_jobs WHERE id=?",(jid,)).fetchone(); c.close()
+    _wake_event.set()
     return public_job(r)
 
 def get_job_for_user(user_id,job_id):
@@ -181,31 +193,82 @@ def recover_orphaned_jobs_on_startup():
     c.commit(); c.close()
 
 def start_worker(processor,after_complete=None):
-    global _started; ensure_job_table(); recover_orphaned_jobs_on_startup()
+    global _started
+    ensure_job_table()
+    recover_orphaned_jobs_on_startup()
     with _start_lock:
-        if _started: return
+        if _started:
+            return
         _started=True
+
     def loop():
-        last=0.0
+        last_recovery=0.0
         while True:
             try:
-                if time.monotonic()-last>60: _recover_stale(); last=time.monotonic()
+                if time.monotonic()-last_recovery>60:
+                    _recover_stale()
+                    last_recovery=time.monotonic()
+
                 job=_claim()
-                if not job: time.sleep(.2); continue
-                stop=threading.Event(); threading.Thread(target=_heartbeat,args=(job["id"],stop),daemon=True).start()
+                if not job:
+                    _wake_event.wait(2.0)
+                    _wake_event.clear()
+                    continue
+
+                stop=threading.Event()
+                threading.Thread(
+                    target=_heartbeat,
+                    args=(job["id"],stop),
+                    daemon=True,
+                ).start()
+
+                last_cancel_at=0.0
+                cancel_cached=False
+                last_partial_at=0.0
+
+                def cancel_check(force=False):
+                    nonlocal last_cancel_at,cancel_cached
+                    current=time.monotonic()
+                    if force or current-last_cancel_at>=0.35:
+                        cancel_cached=is_cancel_requested(job["id"])
+                        last_cancel_at=current
+                    return cancel_cached
+
                 try:
-                    if is_cancel_requested(job["id"]): raise JobCancelled()
+                    if cancel_check(force=True):
+                        raise JobCancelled()
+
                     def updater(text,**kwargs):
-                        if is_cancel_requested(job["id"]): raise JobCancelled()
+                        nonlocal last_partial_at
+                        if cancel_check():
+                            raise JobCancelled()
+                        current=time.monotonic()
+                        if last_partial_at and current-last_partial_at<0.45:
+                            return
                         update_partial(job["id"],text,**kwargs)
-                    result=processor(job,updater,lambda:is_cancel_requested(job["id"]))
-                    if is_cancel_requested(job["id"]): raise JobCancelled()
+                        last_partial_at=current
+
+                    result=processor(job,updater,lambda:cancel_check())
+                    if cancel_check(force=True):
+                        raise JobCancelled()
+
                     mid=_finish(job,result)
                     if after_complete:
-                        try: after_complete(job,result,mid)
-                        except Exception: pass
-                except JobCancelled: _cancelled(job)
-                except Exception as e: _retry_or_fail(job,e)
-                finally: stop.set()
-            except Exception: time.sleep(1.2)
-    threading.Thread(target=loop,name="pick-background-worker",daemon=True).start()
+                        try:
+                            after_complete(job,result,mid)
+                        except Exception:
+                            pass
+                except JobCancelled:
+                    _cancelled(job)
+                except Exception as e:
+                    _retry_or_fail(job,e)
+                finally:
+                    stop.set()
+            except Exception:
+                time.sleep(1.2)
+
+    threading.Thread(
+        target=loop,
+        name="pick-background-worker",
+        daemon=True,
+    ).start()

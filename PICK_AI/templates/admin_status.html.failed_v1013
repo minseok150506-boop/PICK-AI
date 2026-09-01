@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}"><title>PICK 관리자</title>
+<style>
+:root{color-scheme:dark}body{margin:0;background:#101010;color:#f5f5f5;font-family:Arial,sans-serif}.wrap{max-width:1200px;margin:auto;padding:28px 18px 60px}
+a{color:#9cc4ff}.top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}
+.card,.panel{background:#1b1b1b;border:1px solid #303030;border-radius:16px;padding:16px}.card strong{display:block;font-size:26px}.muted{color:#aaa}.good{color:#87e69b}.bad{color:#ff9c9c}
+table{width:100%;border-collapse:collapse}th,td{padding:10px;text-align:left;border-bottom:1px solid #303030;vertical-align:top}.badge{padding:4px 9px;border-radius:999px;background:#303030}
+button{border:0;border-radius:9px;padding:8px 11px;background:#2f6fed;color:white;cursor:pointer}button.danger{background:#a83d3d}pre{white-space:pre-wrap;background:#111;padding:10px;border-radius:9px}
+.log-detail{max-width:520px;white-space:pre-wrap;word-break:break-word}@media(max-width:800px){.cards{grid-template-columns:1fr 1fr}.optional{display:none}}@media(max-width:520px){.cards{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<div class="top"><div><h1>PICK 관리자</h1><div class="muted">현재 권한: <strong>{{ admin_label }}</strong></div>
+{% if admin_label == '부관리자' %}<div class="muted">설정·로그 조회 가능 / 관리자 권한 부여·해제 불가</div>{% endif %}</div>
+<div><a href="/">채팅</a> · <a href="/logout">로그아웃</a></div></div>
+<div class="cards">
+<div class="card"><span class="muted">사용자</span><strong>{{ users }}</strong></div>
+<div class="card"><span class="muted">대화</span><strong>{{ convs }}</strong></div>
+<div class="card"><span class="muted">메시지</span><strong>{{ msgs }}</strong></div>
+<div class="card"><span class="muted">영구 DB</span><strong class="{{ 'good' if db_status.persistent else 'bad' }}">{{ '연결' if db_status.persistent else '주의' }}</strong><div class="muted">{{ db_status.mode }}</div></div>
+</div>
+<div class="panel"><h2>PICK AI 엔진</h2><p>{{ '정상 연결' if ollama_ok else '연결 실패' }}</p><pre>{{ models }}</pre></div>
+<div class="panel" style="margin-top:14px"><h2>사용자 / 관리자 관리</h2><p class="muted">{% if can_manage_roles %}관리자 권한을 부여/해제할 수 있습니다.{% else %}사용자와 로그는 볼 수 있지만 관리자 권한은 변경할 수 없습니다.{% endif %}</p><div id="usersBox">불러오는 중...</div></div>
+<div class="panel" style="margin-top:14px"><h2>사용자 활동 로그</h2>
+<table><thead><tr><th>시간</th><th>사용자</th><th>활동</th><th>내용</th><th class="optional">IP</th></tr></thead><tbody>
+{% for log in audit_logs %}<tr><td>{{ log.created_at }}</td><td>{{ log.username or '-' }}</td><td><span class="badge">{{ log.event }}</span></td><td class="log-detail">{{ log.detail or '-' }}</td><td class="optional">{{ log.ip_hint or '-' }}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">아직 사용자 활동 로그가 없습니다.</td></tr>{% endfor %}
+</tbody></table></div>
+<div class="panel" style="margin-top:14px"><h2>서비스 로그</h2>{% for log in service_logs %}<pre>[{{ log.created_at }}] {{ log.level }} - {{ log.message }}</pre>{% else %}<div class="muted">서비스 로그가 없습니다.</div>{% endfor %}</div>
+</div>
+<script>
+const csrf=document.querySelector('meta[name="csrf-token"]')?.content||"";const esc=v=>String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+async function req(url,options={}){const h=new Headers(options.headers||{});if((options.method||"GET").toUpperCase()!=="GET")h.set("X-CSRF-Token",csrf);const r=await fetch(url,{...options,headers:h,credentials:"same-origin"});const d=await r.json();if(!r.ok||d.ok===false)throw new Error(d.error||"요청 실패");return d}
+async function loadUsers(){const box=document.getElementById("usersBox");try{const d=await req("/api/admin/users");box.innerHTML=`<table><thead><tr><th>아이디</th><th>권한</th><th>관리</th></tr></thead><tbody>${(d.users||[]).map(u=>`<tr><td><strong>${esc(u.username)}</strong></td><td>${esc(u.display_role)}</td><td>${u.can_promote?`<button onclick="changeRole(${u.id},'promote')">관리자 지정</button>`:""} ${u.can_demote?`<button class="danger" onclick="changeRole(${u.id},'demote')">권한 해제</button>`:""} ${(!u.can_promote&&!u.can_demote)?"-":""}</td></tr>`).join("")}</tbody></table>`}catch(e){box.textContent=e.message}}
+async function changeRole(id,action){if(!confirm("권한을 변경할까요?"))return;try{await req(`/api/admin/users/${id}/${action}`,{method:"POST"});await loadUsers()}catch(e){alert(e.message)}}loadUsers();
+</script></body></html>

@@ -221,15 +221,20 @@ function markdown(text) {
     if (/^#\s+/.test(line)) { closeList(); html += `<h1>${plainInline(line.replace(/^#\s+/, ""))}</h1>`; continue; }
 
     const ul = line.match(/^\s*[-*]\s+(.+)/);
-    const ol = line.match(/^\s*\d+\.\s+(.+)/);
+    const ol = line.match(/^\s*(\d+)\.\s+(.+)/);
     if (ul) {
       if (list !== "ul") { closeList(); list = "ul"; html += "<ul>"; }
       html += `<li>${plainInline(ul[1])}</li>`;
       continue;
     }
     if (ol) {
-      if (list !== "ol") { closeList(); list = "ol"; html += "<ol>"; }
-      html += `<li>${plainInline(ol[1])}</li>`;
+      const itemNumber = Math.max(1, Number(ol[1]) || 1);
+      if (list !== "ol") {
+        closeList();
+        list = "ol";
+        html += `<ol start="${itemNumber}">`;
+      }
+      html += `<li value="${itemNumber}">${plainInline(ol[2])}</li>`;
       continue;
     }
 
@@ -318,7 +323,6 @@ function renderMessages(scroll = true) {
           ${assistant ? `
           <div class="message-actions">
             <button type="button" data-copy-message="${index}">복사</button>
-            <button type="button" data-speak-message="${index}">듣기</button>
             <button type="button" data-rate-message="${index}" data-rating="1">👍</button>
             <button type="button" data-rate-message="${index}" data-rating="-1">👎</button>
           </div>
@@ -395,7 +399,7 @@ function pollBackgroundJob(jobId, chatId) {
         updateSendButtons();
         return;
       }
-      setTimeout(tick, 400);
+      setTimeout(tick, 700);
     } catch (_) {
       setTimeout(tick, 1000);
     }
@@ -872,14 +876,6 @@ function startVoiceInput() {
   sr.start();
 }
 
-function speakMessage(index) {
-  const msg = state.messages[index];
-  if (!msg || !("speechSynthesis" in window)) return;
-  speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(msg.content);
-  u.lang = "ko-KR";
-  speechSynthesis.speak(u);
-}
 
 async function refreshInferenceStatus() {
   const el = $("queueStatus");
@@ -1358,8 +1354,6 @@ document.addEventListener("click", async event => {
     return showToast("답변을 복사했습니다.");
   }
 
-  const speak = event.target.closest("[data-speak-message]");
-  if (speak) return speakMessage(Number(speak.dataset.speakMessage));
 
   const rate = event.target.closest("[data-rate-message]");
   if (rate) return rateAssistantMessage(

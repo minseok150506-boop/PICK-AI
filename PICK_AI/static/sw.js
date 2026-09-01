@@ -1,4 +1,4 @@
-const CACHE = 'pick-ai-question-v1011';
+const CACHE = 'pick-ai-minipc-final-v1016-20260901';
 const SHELL = ['/static/style.css','/static/app.js','/static/manifest.webmanifest'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

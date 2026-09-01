@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<title>PICK 관리자</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#101010;color:#f5f5f5;font-family:Arial,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:28px 18px 60px}
+a{color:#9cc4ff}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:18px 0}
+.card,.panel{background:#1b1b1b;border:1px solid #303030;border-radius:16px;padding:16px}
+.card strong{display:block;font-size:28px}.muted{color:#aaa}
+table{width:100%;border-collapse:collapse}
+th,td{padding:11px;text-align:left;border-bottom:1px solid #303030}
+.badge{display:inline-block;padding:4px 9px;border-radius:999px;background:#303030}
+button{border:0;border-radius:9px;padding:8px 11px;background:#2f6fed;color:#fff;cursor:pointer}
+button.danger{background:#a83d3d}
+pre{white-space:pre-wrap;background:#111;padding:10px;border-radius:9px}
+@media(max-width:700px){.cards{grid-template-columns:1fr}.optional{display:none}table{font-size:13px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top">
+<div><h1>PICK 관리자</h1><div class="muted">현재 권한: <strong>{{ admin_label }}</strong></div></div>
+<div><a href="/">채팅</a> · <a href="/logout">로그아웃</a></div>
+</div>
+
+<div class="cards">
+<div class="card"><span class="muted">사용자</span><strong>{{ users }}</strong></div>
+<div class="card"><span class="muted">대화</span><strong>{{ convs }}</strong></div>
+<div class="card"><span class="muted">메시지</span><strong>{{ msgs }}</strong></div>
+</div>
+
+<div class="panel">
+<h2>PICK AI 엔진</h2>
+<p>{{ '정상 연결' if ollama_ok else '연결 실패' }}</p>
+<pre>{{ models }}</pre>
+</div>
+
+<div class="panel" style="margin-top:14px">
+<h2>사용자 / 관리자 관리</h2>
+<p class="muted">사용자 아이디와 가입일을 확인하고 관리자 권한을 관리할 수 있습니다. 자기 자신의 관리자 권한은 해제할 수 없습니다.</p>
+<div id="usersBox">불러오는 중...</div>
+</div>
+
+<div class="panel" style="margin-top:14px">
+<h2>최근 로그</h2>
+{% for log in logs %}
+<pre>[{{ log.created_at }}] {{ log.level }} - {{ log.message }}</pre>
+{% endfor %}
+</div>
+</div>
+
+<script>
+const csrf=document.querySelector('meta[name="csrf-token"]')?.content||"";
+const esc=v=>String(v??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
+async function req(url,options={}){
+ const headers=new Headers(options.headers||{});
+ if((options.method||"GET").toUpperCase()!=="GET")headers.set("X-CSRF-Token",csrf);
+ const r=await fetch(url,{...options,headers,credentials:"same-origin"});
+ const d=await r.json();
+ if(!r.ok||d.ok===false)throw new Error(d.error||"요청 실패");
+ return d;
+}
+async function loadUsers(){
+ const box=document.getElementById("usersBox");
+ try{
+  const d=await req("/api/admin/users");
+  box.innerHTML=`<table><thead><tr>
+  <th>아이디</th><th class="optional">가입일</th><th>권한</th>
+  <th class="optional">지정한 관리자</th><th>관리</th></tr></thead>
+  <tbody>${(d.users||[]).map(u=>`<tr>
+  <td><strong>${esc(u.username)}</strong><br><span class="muted">#${u.id}${u.is_self?" · 나":""}</span></td>
+  <td class="optional">${esc(u.created_at)}</td>
+  <td><span class="badge">${esc(u.display_role)}</span></td>
+  <td class="optional">${esc(u.granted_by_username||"-")}</td>
+  <td>
+  ${u.can_promote?`<button onclick="changeRole(${u.id},'promote')">관리자 지정</button>`:""}
+  ${u.can_demote?`<button class="danger" onclick="changeRole(${u.id},'demote')">관리자 해제</button>`:""}
+  ${(!u.can_promote&&!u.can_demote)?"<span class='muted'>-</span>":""}
+  </td></tr>`).join("")}</tbody></table>`;
+ }catch(e){box.textContent=e.message}
+}
+async function changeRole(id,action){
+ const msg=action==="promote"?"관리자로 지정":"관리자 권한 해제";
+ if(!confirm(`이 사용자를 ${msg}할까요?`))return;
+ try{
+  await req(`/api/admin/users/${id}/${action}`,{method:"POST"});
+  await loadUsers();
+ }catch(e){alert(e.message)}
+}
+loadUsers();
+</script>
+</body>
+</html>

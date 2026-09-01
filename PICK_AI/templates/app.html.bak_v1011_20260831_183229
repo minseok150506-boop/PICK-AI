@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#212121">
+  <title>PICK</title>
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="theme-color" content="#101010">
+  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=pick-stop-v106">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <div class="brand">
+        <div class="brand-logo">P</div>
+        <span>PICK</span>
+      </div>
+      <button id="closeSidebarBtn" class="icon-button mobile-only" type="button" aria-label="메뉴 닫기">✕</button>
+    </div>
+
+    <button id="newChatBtn" class="new-chat-button" type="button">
+      <span>✎</span><span>새 채팅</span>
+    </button>
+
+    <div class="sidebar-search-wrap">
+      <input id="chatSearchInput" class="sidebar-search" type="search" placeholder="채팅 검색">
+    </div>
+    <div class="chat-list-title">채팅</div>
+    <div id="chatList" class="chat-list"></div>
+
+    <div class="sidebar-bottom">
+      <button id="memoryCenterBtn" class="sidebar-link sidebar-button" type="button">메모리</button>
+      <button id="learningBtn" class="sidebar-link sidebar-button" type="button">학습 센터</button>
+      <button id="settingsBtn" class="sidebar-link sidebar-button" type="button">설정</button>
+      {% if is_admin %}
+      <a class="sidebar-link" href="/admin/status">관리자 관리</a>
+      {% endif %}
+      <div class="profile">
+        <div class="profile-avatar">{{ username[0]|upper if username else 'U' }}</div>
+        <div class="profile-info">
+          <strong>{{ username }}</strong>
+          <span>{{ admin_label if is_admin else '사용자' }}</span>
+        </div>
+        <a class="logout-button" href="/logout" title="로그아웃">↗</a>
+      </div>
+    </div>
+  </aside>
+
+  <div id="sidebarOverlay" class="sidebar-overlay"></div>
+
+  <main class="main">
+    <div id="celebrationLayer" class="celebration-layer" aria-hidden="true"></div>
+    <div id="seasonalBanner" class="seasonal-banner hidden"></div>
+    <div id="seasonalCelebration" class="seasonal-celebration hidden">
+      <div id="seasonalCelebrationIcon" class="seasonal-celebration-icon"></div>
+      <div><strong id="seasonalCelebrationTitle"></strong><span id="seasonalCelebrationMessage"></span></div>
+    </div>
+    <header class="topbar">
+      <button id="openSidebarBtn" class="icon-button mobile-only" type="button" aria-label="메뉴 열기">☰</button>
+      <button id="modelButton" class="model-label" type="button">
+        PICK <span>⌄</span>
+      </button>
+      <div class="topbar-space"></div>
+      <div id="queueStatus" class="queue-status" title="AI 처리 상태">AI 준비</div>
+    </header>
+
+    <section id="homeScreen" class="screen home-screen active">
+      <div class="home-inner">
+        <div class="home-logo">P</div>
+        <h1>무엇을 도와드릴까요?</h1>
+
+        <div class="composer home-composer">
+          <textarea id="homeInput" rows="1" maxlength="12000" placeholder="PICK에게 메시지 보내기"></textarea>
+          <div class="composer-toolbar">
+            <button class="round-button secondary" type="button" data-file-button title="파일 추가">＋</button>
+            <button id="homeSendBtn" class="round-button primary" type="button" aria-label="전송">↑</button>
+          </div>
+        </div>
+
+        <div class="suggestions">
+          <button type="button" data-prompt="오늘 대한민국 주요 헤드라인을 KBS, MBC, SBS, 연합뉴스 등 여러 언론사를 비교해 중요도 순으로 7개 정리하고, 각 항목에 언론사명을 함께 표시해 주세요">
+            <strong>오늘 뉴스</strong><span>중요한 소식을 빠르게 확인</span>
+          </button>
+          <button type="button" data-prompt="서울의 오늘 날씨를 알려 주세요">
+            <strong>오늘 날씨</strong><span>현재 기온과 강수 가능성</span>
+          </button>
+          <button type="button" data-prompt="Python 코드를 작성해 주세요">
+            <strong>코드 작성</strong><span>아이디어를 코드로 구현</span>
+          </button>
+          <button type="button" data-prompt="PICK으로 인터넷에서 최신 정보를 찾아서 설명해 주세요">
+            <strong>인터넷 검색</strong><span>최신 자료를 찾아 요약</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="chatScreen" class="screen chat-screen">
+      <div id="messageArea" class="message-area"></div>
+
+      <div class="bottom-area">
+        <div class="composer-container">
+          <div class="composer chat-composer">
+            <button id="toolsBtn" class="round-button secondary" type="button" aria-label="파일/도구">＋</button>
+            <div id="toolsMenu" class="tools-menu hidden">
+              <button type="button" data-tool="image">이미지 분석</button>
+              <button type="button" data-tool="image-translate">이미지 번역</button>
+              <button type="button" data-tool="video">동영상 분석</button>
+              <button type="button" data-tool="file">파일 분석</button>
+              <button type="button" data-prompt="PPT를 만들어 주세요">PPT 만들기</button>
+              <button type="button" data-prompt="엑셀 파일을 만들어 주세요">엑셀 만들기</button>
+              <button type="button" data-prompt="워드 파일을 만들어 주세요">워드 만들기</button>
+              <button type="button" data-prompt="사이트를 추천해 주세요">사이트 추천</button>
+            </div>
+            <textarea id="messageInput" rows="1" maxlength="12000" placeholder="PICK에게 메시지 보내기"></textarea>
+            <button id="refineQuestionBtn" class="round-button secondary" type="button" aria-label="질문 확인" title="질문 의도 확인">✓</button>
+          <button id="webSearchBtn" class="round-button secondary" type="button" aria-label="인터넷 검색" title="인터넷 검색">⌕</button>
+          <button id="voiceBtn" class="round-button secondary" type="button" aria-label="음성 입력">🎙</button>
+          <button id="sendBtn" class="round-button primary" type="button" aria-label="전송">↑</button>
+          </div>
+          <p class="disclaimer">PICK은 실수할 수 있습니다. 중요한 정보는 다시 확인해 주세요.</p>
+        </div>
+      </div>
+    </section>
+
+
+
+
+
+    <section id="memoryCenterScreen" class="screen utility-screen">
+      <div class="settings-card memory-center-card">
+        <div class="settings-heading">
+          <div>
+            <span class="eyebrow">PICK MEMORY</span>
+            <h2>메모리</h2>
+            <p class="learning-subtitle">
+              PICK이 기억하는 내용을 확인하고 직접 관리할 수 있습니다.
+            </p>
+          </div>
+          <button id="closeMemoryCenterBtn" class="icon-button" type="button">✕</button>
+        </div>
+
+        
+        <div id="profileMemoryPanel" class="profile-memory-panel">
+          <div class="settings-section-title">
+            <div>
+              <strong>꼭 기억할 사용자 정보</strong>
+              <span>현재 로그인한 계정에만 저장되며 다른 계정에서는 볼 수 없습니다.</span>
+            </div>
+          </div>
+          <div class="profile-memory-grid">
+            <input id="profilePreferredName" type="text" placeholder="불러줄 이름">
+            <input id="profileLanguage" type="text" placeholder="기본 언어 (예: ko, en)">
+            <input id="profileResponseStyle" type="text" placeholder="선호 답변 스타일">
+            <input id="profileMainProject" type="text" placeholder="주요 프로젝트">
+            <textarea id="profileImportantNote" rows="3" placeholder="PICK이 꼭 기억해야 할 정보"></textarea>
+          </div>
+          <div class="profile-memory-actions">
+            <button id="profileMemorySaveBtn" type="button">꼭 기억할 정보 저장</button>
+          </div>
+          <div id="accountIsolationInfo" class="account-isolation-info"></div>
+        </div>
+
+<div id="memoryStats" class="learning-stats">
+          <div><strong>0</strong><span>전체 기억</span></div>
+          <div><strong>0</strong><span>고정 기억</span></div>
+          <div><strong>0</strong><span>대화 요약</span></div>
+        </div>
+
+        <div class="memory-settings-grid">
+          <label><input id="memoryEnabled" type="checkbox"> 메모리 사용</label>
+          <label><input id="memoryAutoExtract" type="checkbox"> 중요한 정보 자동 기억</label>
+          <label><input id="memoryAutoSummary" type="checkbox"> 긴 대화 자동 요약</label>
+          <label><input id="memoryPreferences" type="checkbox"> 사용자 선호 기억</label>
+          <label><input id="memoryProjects" type="checkbox"> 프로젝트 정보 기억</label>
+          <label><input id="memoryDecisions" type="checkbox"> 결정 사항 기억</label>
+        </div>
+
+        <div class="memory-add-advanced">
+          <input id="memoryV2Title" type="text" placeholder="기억 제목 (선택)">
+          <select id="memoryV2Kind">
+            <option value="fact">일반 기억</option>
+            <option value="profile">프로필</option>
+            <option value="preference">선호</option>
+            <option value="project">프로젝트</option>
+            <option value="decision">결정</option>
+            <option value="task">할 일</option>
+          </select>
+          <textarea id="memoryV2Content" rows="3" placeholder="PICK이 기억할 내용을 입력하세요"></textarea>
+          <div class="memory-add-actions">
+            <button id="memoryV2AddBtn" type="button">기억 추가</button>
+            <button id="memorySettingsSaveBtn" type="button">메모리 설정 저장</button>
+            <button id="memoryExportBtn" type="button">메모리 내보내기</button>
+          </div>
+        </div>
+
+        <div id="memoryV2List" class="memory-v2-list"></div>
+      </div>
+    </section>
+
+    <section id="learningScreen" class="screen utility-screen">
+      <div class="settings-card learning-card">
+        <div class="settings-heading">
+          <div>
+            <span class="eyebrow">PICK LEARNING</span>
+            <h2>학습 센터</h2>
+            <p class="learning-subtitle">
+              좋은 답변을 검수해 학습 데이터로 모으고, 나중에 LoRA 미세조정에 사용할 수 있습니다.
+            </p>
+          </div>
+          <button id="closeLearningBtn" class="icon-button" type="button">✕</button>
+        </div>
+
+        <div class="learning-stats" id="learningStats">
+          <div><strong>0</strong><span>좋아요</span></div>
+          <div><strong>0</strong><span>싫어요</span></div>
+          <div><strong>0</strong><span>승인 학습자료</span></div>
+        </div>
+
+        <div class="learning-actions">
+          <button id="exportTrainingBtn" type="button">학습 데이터 JSONL 내보내기</button>
+          <button id="rebuildMemoryIndexBtn" type="button">기억 인덱스 다시 만들기</button>
+        </div>
+
+        <div class="learning-note">
+          <strong>실제 딥러닝 미세조정</strong>
+          <p>
+            이 MiniPC에서는 학습 데이터 수집과 RAG를 담당합니다.
+            실제 LoRA/QLoRA 학습은 NVIDIA CUDA GPU가 있는 PC에서 실행하도록 분리했습니다.
+          </p>
+        </div>
+
+        <div id="learningFeedbackList" class="learning-feedback-list"></div>
+      </div>
+    </section>
+
+    <section id="searchPanel" class="screen utility-screen">
+      <div class="settings-card search-card">
+        <div class="settings-heading">
+          <div>
+            <span class="eyebrow">PICK SEARCH</span>
+            <h2>인터넷 검색</h2>
+          </div>
+          <button id="closeSearchBtn" class="icon-button" type="button">✕</button>
+        </div>
+        <div class="search-input-row">
+          <input id="manualSearchInput" type="search" placeholder="웹에서 검색할 내용을 입력하세요">
+          <button id="manualSearchBtn" type="button">검색</button>
+        </div>
+        <div id="manualSearchResults" class="manual-search-results">
+          <div class="memory-empty">검색 결과가 여기에 표시됩니다.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="settingsScreen" class="screen utility-screen">
+      <div class="settings-card">
+        <div class="settings-heading">
+          <div>
+            <span class="eyebrow">PICK SETTINGS</span>
+            <h2>설정</h2>
+          </div>
+          <button id="closeSettingsBtn" class="icon-button" type="button">✕</button>
+        </div>
+
+        <label class="setting-row seasonal-auto-row">
+          <div>
+            <strong>이벤트 모드</strong>
+            <span>기본은 자동 변경이며, 사용자가 고른 이벤트가 있으면 사용자 설정을 우선합니다.</span>
+          </div>
+          <select id="settingsSeasonalOverride"><option value="auto">자동</option></select>
+        </label>
+        <div class="setting-row seasonal-auto-row">
+          <div><strong>현재 적용 이벤트</strong><span>자동 또는 사용자 우선 결과</span></div>
+          <div id="seasonalModeStatus" class="seasonal-mode-status">자동</div>
+        </div>
+
+        <label class="setting-row">
+          <div>
+            <strong>답변 언어</strong>
+            <span>자동 감지 또는 원하는 언어를 직접 선택</span>
+          </div>
+          <select id="settingsLanguage">
+            <option value="auto">자동 감지</option>
+          </select>
+        </label>
+
+        <label class="setting-row">
+          <div><strong>AI 모델</strong><span>PICK에서 사용할 AI 모델을 선택합니다.</span></div>
+          <select id="settingsModel"><option value="auto">자동 선택</option></select>
+        </label>
+
+        <label class="setting-row">
+          <div><strong>인터넷 검색</strong><span>최신 정보가 필요할 때 자동 검색</span></div>
+          <select id="settingsWebMode">
+            <option value="auto">자동</option>
+            <option value="always">항상</option>
+            <option value="off">사용 안 함</option>
+          </select>
+        </label>
+
+        <label class="setting-row">
+          <div><strong>간격 좁게</strong><span>채팅 메시지 간격을 더 작게 표시</span></div>
+          <input id="settingsCompact" type="checkbox">
+        </label>
+
+        <div class="settings-section">
+  <div class="settings-section-title">
+    <div><strong>장기 기억</strong><span>PICK이 다음 대화에서도 참고할 내용을 직접 관리합니다.</span></div>
+  </div>
+  <div class="memory-add-row">
+    <input id="memoryInput" type="text" maxlength="4000" placeholder="예: 저는 Python을 주로 사용합니다.">
+    <button id="memoryAddBtn" type="button">기억 추가</button>
+  </div>
+  <div id="memoryManager" class="memory-manager"></div>
+</div>
+<div class="settings-section">
+  <div class="settings-section-title">
+    <div><strong>내 데이터</strong><span>채팅과 기억을 JSON으로 내보냅니다.</span></div>
+  </div>
+  <div class="account-actions"><button id="accountExportBtn" type="button">내 데이터 내보내기</button></div>
+</div>
+{% if is_admin %}
+<div id="adminOverview" class="admin-overview">
+  <strong>관리자 현황</strong>
+  <div id="adminOverviewBody">불러오는 중...</div>
+</div>
+{% endif %}
+<div class="diagnostics-panel">
+<div><strong>시스템 진단</strong><span id="diagnosticsText">NAS·DB·MiniPC AI 상태를 검사합니다.</span></div>
+<button id="diagnosticsBtn" type="button">검사</button></div>
+<div class="settings-actions">
+          <button id="saveSettingsBtn" class="settings-save" type="button">저장</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="imageScreen" class="screen utility-screen">
+      <div class="utility-card"><h2>이미지 분석</h2><div id="imageResult" class="result">이미지를 붙여넣거나 업로드해 주세요.</div></div>
+    </section>
+    <section id="videoScreen" class="screen utility-screen">
+      <div class="utility-card"><h2>동영상 분석</h2><div id="videoResult" class="result">동영상을 붙여넣거나 업로드해 주세요.</div></div>
+    </section>
+    <section id="fileScreen" class="screen utility-screen">
+      <div class="utility-card"><h2>파일 분석</h2><div id="fileResult" class="result">파일을 붙여넣거나 업로드해 주세요.</div></div>
+    </section>
+  </main>
+</div>
+
+<input id="filePicker" type="file" hidden>
+<div id="toast" class="toast" role="status"></div>
+
+<script src="{{ url_for('static', filename='app.js') }}?v=pick-stop-v106"></script>
+</body>
+</html>

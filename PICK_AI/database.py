@@ -216,7 +216,6 @@ def database_status(deep=False):
     result = {
         "mode": _LAST_DB_MODE,
         "persistent": bool(_LAST_DB_MODE == "turso-serverless"),
-        "render": bool(os.environ.get("RENDER")),
         "remote_configured": bool(_TURSO_CONFIGURED),
         "partial_configuration": bool(_TURSO_PARTIAL_CONFIG),
         "fallback_active": bool(_LAST_DB_MODE.startswith("sqlite-fallback")),
@@ -471,10 +470,20 @@ def init_db():
 
 def log(level, message):
     try:
+        level_value = str(level)[:80]
+        message_value = str(message)[:4000]
+        try:
+            from log_security import protect_service_fields
+            level_value, message_value = protect_service_fields(
+                level_value, message_value
+            )
+        except Exception:
+            pass
+
         conn = connect()
         conn.execute(
             "INSERT INTO service_logs(level,message,created_at) VALUES(?,?,?)",
-            (str(level), str(message)[:4000], now())
+            (level_value, message_value, now())
         )
         conn.commit()
         conn.close()

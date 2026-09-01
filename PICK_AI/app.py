@@ -44,6 +44,13 @@ from conversation_memory import refresh_summary_if_needed, get_conversation_summ
 from account_profile import get_profile, update_profile, format_profile_context
 from account_isolation import assert_chat_owner, assert_message_owner, assert_attachment_owner, private_upload_dir, user_counts
 from audit import write_audit
+from log_security import (
+    decode_audit_row,
+    decode_service_row,
+    get_log_encryption_status,
+    migrate_existing_logs,
+    set_log_encryption_enabled,
+)
 from model_router import choose_model
 from language_support import SUPPORTED_LANGUAGES, language_instruction
 from coding_assistant import coding_instruction, is_coding_query
@@ -78,7 +85,7 @@ from admin_roles import (
     admin_label as role_admin_label,
     can_manage_roles as role_can_manage_roles,
     list_users_for_admin, promote_admin, demote_admin,
-    ensure_subadmin_account,
+    normalize_legacy_admin_roles,
 )
 import migrations
 
@@ -245,11 +252,9 @@ def current_user_can_manage_roles():
 
 def persistent_storage_required():
     return (
-        bool(os.environ.get("RENDER"))
-        and str(os.environ.get("PICK_REQUIRE_PERSISTENT_DB", "1")).strip().lower()
+        str(os.environ.get("PICK_REQUIRE_PERSISTENT_DB", "1")).strip().lower()
         not in {"0", "false", "off", "no"}
     )
-
 
 def persistent_storage_ready():
     if not persistent_storage_required():
@@ -308,6 +313,52 @@ def build_system_extensions(user_id, text):
     translation = translation_instruction(text)
     return "\n\n".join(x for x in [lang, code, translation] if x)
 
+
+def _quick_news_request(text):
+    value = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not any(word in value for word in ("뉴스", "헤드라인", "소식")):
+        return False
+    if any(word in value for word in (
+        "분석", "영향", "의미", "평가", "논쟁",
+        "비교 분석", "자세히 설명", "원인",
+    )):
+        return False
+    return any(phrase in value for phrase in (
+        "뉴스 알려", "뉴스알려", "뉴스 보여", "뉴스보여",
+        "오늘 뉴스", "오늘뉴스", "주요 뉴스", "주요뉴스",
+        "최신 뉴스", "최신뉴스", "뉴스 정리", "뉴스정리",
+        "헤드라인", "소식 알려", "소식알려",
+    ))
+
+
+def _quick_news_answer(text):
+    try:
+        result = web_search(str(text or ""), mode="always")
+    except Exception:
+        return None
+    if not isinstance(result, dict):
+        return None
+    rows = result.get("results") or []
+    if not rows:
+        return None
+
+    lines = ["최신 뉴스입니다."]
+    for index, row in enumerate(rows[:7], 1):
+        title = re.sub(r"\s+", " ", str(row.get("title") or "")).strip()
+        if not title:
+            continue
+        provider = re.sub(r"\s+", " ", str(row.get("provider") or "PICK Search")).strip()
+        snippet = re.sub(r"\s+", " ", str(row.get("snippet") or "")).strip()
+        url = str(row.get("url") or "").strip()
+        lines.append(f"{index}. **{title}** — {provider}")
+        if snippet and snippet.lower() not in title.lower():
+            lines.append(f"   {snippet[:180]}")
+        if url.startswith(("http://", "https://")):
+            lines.append(f"   [기사 보기]({url})")
+
+    return "\n".join(lines) if len(lines) > 1 else None
+
+
 def direct_realtime_or_identity_answer(text, payload=None):
     raw = str(text or "").strip()
     lowered = raw.lower()
@@ -327,6 +378,11 @@ def direct_realtime_or_identity_answer(text, payload=None):
     navigation = navigation_answer(raw, payload)
     if navigation is not None:
         return navigation, "navigation"
+
+    if _quick_news_request(raw):
+        quick_news = _quick_news_answer(raw)
+        if quick_news:
+            return quick_news, "news"
 
     office_kind = detect_office_kind(raw)
     if office_kind:
@@ -625,7 +681,7 @@ def process_background_chat_job(job, update_partial, is_cancelled):
         answer,kind=direct
         return {"answer":answer,"stored_answer":answer,"sources":[],"model":"PICK-direct",
                 "meta":{"route":{"primary":kind},"web_used":kind in {"weather","news"},"web_kind":kind if kind in {"weather","news"} else None}}
-    recent=[{"role":m["role"],"content":m["content"]} for m in history[:-1][-16:]]
+    recent=[{"role":m["role"],"content":m["content"]} for m in history[:-1][-8:]]
     orch=orchestrate(text,recent); qa=analyze_question(text,recent); normalized=orch.rewritten_question or qa.normalized or text; route=orch.route
     if orch.clarification:
         a=orch.clarification
@@ -639,7 +695,7 @@ def process_background_chat_job(job, update_partial, is_cancelled):
             q=text if is_person_query(text) else refine_search_query(qa,recent); web_context=web_search(q,mode="always"); web_text=format_web_search(web_context)
         except Exception as e: log("WARNING",f"background web search: {e}")
     if is_cancelled(): raise JobCancelled()
-    memory_text=format_memory_context_v2(uid,normalized); learning_text=format_training_examples(uid,normalized,limit=3); profile_text=format_profile_context(uid)
+    memory_text=format_memory_context_v2(uid,normalized); learning_text=format_training_examples(uid,normalized,limit=2); profile_text=format_profile_context(uid)
     safe_web=wrap_untrusted_context("인터넷 검색 자료",web_text) if web_text else ""; combined="\n\n".join(x for x in [profile_text,memory_text,learning_text,safe_web] if x)
     ext=build_system_extensions(uid,normalized)
     seasonal=resolve_mode(uid,user_timezone=(payload.get("timezone") or "Asia/Seoul"),country=(str(payload.get("country") or "").upper() or None),override=settings.get("seasonal_override","auto"))
@@ -740,19 +796,12 @@ try:
 except Exception as _legacy_log_time_exc:
     LEGACY_LOG_TIME_MIGRATION_STATUS = {"ok": False, "error": str(_legacy_log_time_exc)}
     log("WARNING", f"legacy log time migration: {_legacy_log_time_exc}")
-SUBADMIN_BOOTSTRAP_STATUS = {"ok": False, "configured": False}
 try:
-    _subadmin_db_ready, _subadmin_db_status = persistent_storage_ready()
-    if _subadmin_db_ready:
-        SUBADMIN_BOOTSTRAP_STATUS = ensure_subadmin_account()
-    else:
-        SUBADMIN_BOOTSTRAP_STATUS = {
-            "ok": False,
-            "configured": False,
-            "reason": "persistent_database_unavailable",
-        }
-except Exception as _subadmin_exc:
-    log("WARNING", f"subadmin bootstrap: {_subadmin_exc}")
+    _legacy_role_changes = normalize_legacy_admin_roles()
+    if _legacy_role_changes:
+        log("INFO", f"legacy subadmin accounts changed to normal users: {_legacy_role_changes}")
+except Exception as _role_cleanup_exc:
+    log("WARNING", f"legacy admin role cleanup: {_role_cleanup_exc}")
 
 ensure_job_table()
 start_background_worker(
@@ -781,14 +830,14 @@ def too_large(_):
 
 
 
-@app.get("/api/render/status")
-def api_render_status():
+@app.get("/api/server/status")
+def api_server_status():
     auth_err = require_login_json()
     if auth_err:
         return auth_err
     return jsonify({
         "ok": True,
-        "render": bool(os.environ.get("RENDER")),
+        "server": "minipc-cloudflare",
         "data_dir": str(DATA_DIR),
         "storage_dir": str(STORAGE_DIR),
         "database": database_status(deep=True),
@@ -810,7 +859,7 @@ def healthz():
     return jsonify({
         "ok": True,
         "service": "PICK AI",
-        "mode": "synology-minipc",
+        "mode": "minipc-cloudflare",
         "database_mode": dbs.get("mode"),
         "database_persistent": dbs.get("persistent"),
         "database_fallback": dbs.get("fallback_active", False),
@@ -1094,13 +1143,60 @@ def api_account_delete():
     write_audit("account.delete",user_id=uid,username=username); session.clear()
     return jsonify({"ok":True})
 
+@app.get("/api/admin/log-security")
+def api_admin_log_security_get():
+    auth_err = require_login_json()
+    if auth_err:
+        return auth_err
+    if not current_user_is_owner():
+        return jsonify({"ok":False,"error":"최고 관리자만 로그 암호화 설정을 변경할 수 있습니다."}),403
+    return jsonify({"ok":True,"log_security":get_log_encryption_status()})
+
+
+@app.post("/api/admin/log-security")
+def api_admin_log_security_save():
+    auth_err = require_login_json()
+    if auth_err:
+        return auth_err
+    if not current_user_is_owner():
+        return jsonify({"ok":False,"error":"최고 관리자만 로그 암호화 설정을 변경할 수 있습니다."}),403
+    enabled = bool((request.get_json(silent=True) or {}).get("enabled"))
+    set_log_encryption_enabled(enabled)
+    write_audit(
+        "admin.log_encryption_setting",
+        user_id=session["user_id"],
+        username=session.get("username"),
+        detail=f"enabled={enabled}",
+    )
+    return jsonify({"ok":True,"log_security":get_log_encryption_status()})
+
+
+@app.post("/api/admin/log-security/migrate")
+def api_admin_log_security_migrate():
+    auth_err = require_login_json()
+    if auth_err:
+        return auth_err
+    if not current_user_is_owner():
+        return jsonify({"ok":False,"error":"최고 관리자만 기존 로그를 변환할 수 있습니다."}),403
+    action = str((request.get_json(silent=True) or {}).get("action") or "").strip().lower()
+    try:
+        result = migrate_existing_logs(action)
+    except ValueError as exc:
+        return jsonify({"ok":False,"error":str(exc)}),400
+    return jsonify({
+        "ok":True,
+        "result":result,
+        "log_security":get_log_encryption_status(),
+    })
+
+
 @app.get("/api/admin/audit")
 def api_admin_audit():
     auth_err=require_login_json()
     if auth_err:return auth_err
     if not current_user_is_admin():return jsonify({"ok":False,"error":"관리자만 접근할 수 있습니다."}),403
     conn=connect(); rows=conn.execute("SELECT id,user_id,username,event,detail,ip_hint,created_at FROM audit_events ORDER BY id DESC LIMIT 200").fetchall(); conn.close()
-    return jsonify({"ok":True,"events":[dict(r) for r in rows]})
+    return jsonify({"ok":True,"events":[decode_audit_row(dict(r)) for r in rows]})
 
 @app.get("/api/admin/users")
 def api_admin_users():
@@ -1698,7 +1794,7 @@ def api_chat_stream(chat_id):
         return Response(direct_stream(), mimetype="application/x-ndjson")
 
     history = get_messages(chat_id)
-    recent = [{"role": m["role"], "content": m["content"]} for m in history[:-1][-16:]]
+    recent = [{"role": m["role"], "content": m["content"]} for m in history[:-1][-8:]]
 
     orchestration = orchestrate(text, recent)
     question_analysis = analyze_question(text, recent)
@@ -1755,7 +1851,7 @@ def api_chat_stream(chat_id):
             log("WARNING", f"web search stream: {exc}")
 
     memory_text = format_memory_context_v2(uid, normalized_text)
-    learning_text = format_training_examples(uid, normalized_text, limit=3)
+    learning_text = format_training_examples(uid, normalized_text, limit=2)
     profile_text = format_profile_context(uid)
     safe_web_text = wrap_untrusted_context("인터넷 검색 자료", web_text) if web_text else ""
     combined_context = "\n\n".join(x for x in [profile_text, memory_text, learning_text, safe_web_text] if x)
@@ -1952,7 +2048,7 @@ def api_chat_send(chat_id):
     history = get_messages(chat_id)
     history_for_llm = [
         {"role": m["role"], "content": m["content"]}
-        for m in history[:-1][-16:]
+        for m in history[:-1][-8:]
     ]
     orchestration = orchestrate(text, history_for_llm)
     question_analysis = analyze_question(text, history_for_llm)
@@ -2285,6 +2381,9 @@ def admin_status():
     ).fetchall()
     conn.close()
 
+    audit_logs = [decode_audit_row(dict(row)) for row in audit_logs]
+    service_logs = [decode_service_row(dict(row)) for row in service_logs]
+
     try:
         models = ollama_health()
         ollama_ok = True
@@ -2304,7 +2403,8 @@ def admin_status():
         admin_label=current_admin_label(),
         can_manage_roles=current_user_can_manage_roles(),
         db_status=database_status(deep=False),
-        subadmin_status=SUBADMIN_BOOTSTRAP_STATUS,
+        log_security=get_log_encryption_status(),
+        is_owner=current_user_is_owner(),
     )
 
 

@@ -40,7 +40,7 @@ MAX_UPLOAD_MB = int(os.environ.get("PICK_MAX_UPLOAD_MB", "150"))
 MAX_CONTENT_LENGTH = MAX_UPLOAD_MB * 1024 * 1024
 
 SESSION_COOKIE_SECURE = (
-    os.environ.get("PICK_COOKIE_SECURE", "1" if os.environ.get("RENDER") else "0") == "1"
+    os.environ.get("PICK_COOKIE_SECURE", "1") == "1"
 )
 SESSION_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_HTTPONLY = True

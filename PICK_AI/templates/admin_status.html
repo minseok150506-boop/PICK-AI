@@ -9,19 +9,19 @@
 :root{color-scheme:dark}
 body{margin:0;background:#101010;color:#f5f5f5;font-family:Arial,sans-serif}
 .wrap{max-width:1200px;margin:auto;padding:28px 18px 60px}
-a{color:#9cc4ff}
-.top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+a{color:#9cc4ff}.top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0}
 .card,.panel{background:#1b1b1b;border:1px solid #303030;border-radius:16px;padding:16px}
-.card strong{display:block;font-size:26px}
-.muted{color:#aaa}.good{color:#87e69b}.bad{color:#ff9c9c}
-table{width:100%;border-collapse:collapse}
-th,td{padding:10px;text-align:left;border-bottom:1px solid #303030;vertical-align:top}
+.card strong{display:block;font-size:26px}.muted{color:#aaa}.good{color:#87e69b}.bad{color:#ff9c9c}
+table{width:100%;border-collapse:collapse}th,td{padding:10px;text-align:left;border-bottom:1px solid #303030;vertical-align:top}
 .badge{padding:4px 9px;border-radius:999px;background:#303030;display:inline-block}
-button{border:0;border-radius:9px;padding:8px 11px;background:#2f6fed;color:white;cursor:pointer}
-button.danger{background:#a83d3d}
+button{border:0;border-radius:9px;padding:9px 12px;background:#2f6fed;color:white;cursor:pointer;margin:3px}
+button.danger{background:#a83d3d}button.secondary{background:#444}
 pre{white-space:pre-wrap;background:#111;padding:10px;border-radius:9px}
 .log-detail{max-width:520px;white-space:pre-wrap;word-break:break-word}
+.security-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0}
+.switch{display:flex;align-items:center;gap:8px;font-weight:700}
+.notice{padding:10px 12px;border-radius:10px;background:#151515;border:1px solid #333;margin-top:10px}
 @media(max-width:800px){.cards{grid-template-columns:1fr 1fr}.optional{display:none}}
 @media(max-width:520px){.cards{grid-template-columns:1fr}}
 </style>
@@ -32,9 +32,6 @@ pre{white-space:pre-wrap;background:#111;padding:10px;border-radius:9px}
 <div>
 <h1>PICK 관리자</h1>
 <div class="muted">현재 권한: <strong>{{ admin_label }}</strong></div>
-{% if admin_label == '부관리자' %}
-<div class="muted">설정·로그 조회 가능 / 관리자 권한 부여·해제 불가</div>
-{% endif %}
 </div>
 <div><a href="/">채팅</a> · <a href="/logout">로그아웃</a></div>
 </div>
@@ -44,26 +41,50 @@ pre{white-space:pre-wrap;background:#111;padding:10px;border-radius:9px}
 <div class="card"><span class="muted">대화</span><strong>{{ convs }}</strong></div>
 <div class="card"><span class="muted">메시지</span><strong>{{ msgs }}</strong></div>
 <div class="card"><span class="muted">영구 DB</span>
-<strong class="{{ 'good' if db_status.persistent else 'bad' }}">
-{{ '연결' if db_status.persistent else '주의' }}
-</strong>
+<strong class="{{ 'good' if db_status.persistent else 'bad' }}">{{ '연결' if db_status.persistent else '주의' }}</strong>
 <div class="muted">{{ db_status.mode }}</div>
 </div>
 </div>
 
 <div class="panel">
-<h2>PICK AI 엔진</h2>
-<p>{{ '정상 연결' if ollama_ok else '연결 실패' }}</p>
+<h2>PICK 운영 서버</h2>
+<p><strong>MiniPC + Cloudflare Named Tunnel</strong></p>
+<p class="muted">Render는 PICK 운영에 사용하지 않습니다.</p>
+<p>Ollama: {{ '정상 연결' if ollama_ok else '연결 실패' }}</p>
 <pre>{{ models }}</pre>
+</div>
+
+<div class="panel" style="margin-top:14px">
+<h2>로그 암호화</h2>
+<p class="muted">서비스 로그와 사용자 활동 로그의 민감한 문자열을 암호화해서 Turso에 저장합니다. 관리자 화면에서는 자동 복호화합니다.</p>
+{% if is_owner %}
+<div class="security-row">
+<label class="switch">
+<input id="logEncryptionToggle" type="checkbox" {{ 'checked' if log_security.enabled else '' }}>
+새 로그 자동 암호화
+</label>
+<button id="saveLogSecurityBtn">설정 저장</button>
+<button id="encryptExistingBtn">기존 로그 암호화</button>
+<button id="decryptExistingBtn" class="secondary">기존 로그 복호화</button>
+</div>
+{% else %}
+<div class="notice">로그 암호화 설정은 최고 관리자만 변경할 수 있습니다.</div>
+{% endif %}
+<div id="logSecurityStatus" class="notice">
+상태: {{ '켜짐' if log_security.enabled else '꺼짐' }} ·
+서비스 로그 암호화 {{ log_security.encrypted_service_rows }}/{{ log_security.service_rows }} ·
+사용자 로그 암호화 {{ log_security.encrypted_audit_rows }}/{{ log_security.audit_rows }}
+</div>
+<p class="muted">암호화 키는 PICK의 SECRET_KEY에서 분리 파생됩니다. SECRET_KEY를 임의로 바꾸면 기존 암호화 로그를 복호화할 수 없습니다.</p>
 </div>
 
 <div class="panel" style="margin-top:14px">
 <h2>사용자 / 관리자 관리</h2>
 <p class="muted">
-{% if can_manage_roles %}
-관리자 권한을 부여/해제할 수 있습니다.
+{% if is_owner %}
+최고 관리자가 직접 일반 사용자를 관리자로 지정하거나 다시 일반 사용자로 변경할 수 있습니다.
 {% else %}
-사용자와 로그는 볼 수 있지만 관리자 권한은 변경할 수 없습니다.
+사용자 정보는 볼 수 있지만 권한 변경은 최고 관리자만 할 수 있습니다.
 {% endif %}
 </p>
 <div id="usersBox">불러오는 중...</div>
@@ -71,11 +92,8 @@ pre{white-space:pre-wrap;background:#111;padding:10px;border-radius:9px}
 
 <div class="panel" style="margin-top:14px">
 <h2>사용자 활동 로그</h2>
-<p class="muted">로그인·가입·로그아웃·질문·채팅 생성/삭제 등 최근 활동입니다.</p>
 <table>
-<thead>
-<tr><th>시간</th><th>사용자</th><th>활동</th><th>내용</th><th class="optional">IP</th></tr>
-</thead>
+<thead><tr><th>시간</th><th>사용자</th><th>활동</th><th>내용</th><th class="optional">IP</th></tr></thead>
 <tbody>
 {% for log in audit_logs %}
 <tr>
@@ -111,6 +129,7 @@ const esc=v=>String(v??"")
 async function req(url,options={}){
  const h=new Headers(options.headers||{});
  if((options.method||"GET").toUpperCase()!=="GET")h.set("X-CSRF-Token",csrf);
+ if(options.body&&!h.has("Content-Type"))h.set("Content-Type","application/json");
  const r=await fetch(url,{...options,headers:h,credentials:"same-origin"});
  const d=await r.json();
  if(!r.ok||d.ok===false)throw new Error(d.error||"요청 실패");
@@ -127,7 +146,7 @@ async function loadUsers(){
    <td>${esc(u.display_role)}</td>
    <td>
     ${u.can_promote?`<button onclick="changeRole(${u.id},'promote')">관리자 지정</button>`:""}
-    ${u.can_demote?`<button class="danger" onclick="changeRole(${u.id},'demote')">권한 해제</button>`:""}
+    ${u.can_demote?`<button class="danger" onclick="changeRole(${u.id},'demote')">일반 사용자로 변경</button>`:""}
     ${(!u.can_promote&&!u.can_demote)?"-":""}
    </td></tr>`).join("")}</tbody></table>`;
  }catch(e){box.textContent=e.message}
@@ -140,6 +159,35 @@ async function changeRole(id,action){
   await loadUsers();
  }catch(e){alert(e.message)}
 }
+
+function showSecurity(s){
+ const el=document.getElementById("logSecurityStatus");
+ if(!el||!s)return;
+ el.textContent=`상태: ${s.enabled?"켜짐":"꺼짐"} · 서비스 로그 암호화 ${s.encrypted_service_rows}/${s.service_rows} · 사용자 로그 암호화 ${s.encrypted_audit_rows}/${s.audit_rows}`;
+}
+
+document.getElementById("saveLogSecurityBtn")?.addEventListener("click",async()=>{
+ try{
+  const enabled=Boolean(document.getElementById("logEncryptionToggle")?.checked);
+  const d=await req("/api/admin/log-security",{method:"POST",body:JSON.stringify({enabled})});
+  showSecurity(d.log_security);
+  alert("로그 암호화 설정을 저장했습니다.");
+ }catch(e){alert(e.message)}
+});
+
+async function migrateLogs(action){
+ const label=action==="encrypt"?"기존 로그를 암호화":"기존 로그를 복호화";
+ if(!confirm(`${label}할까요? 로그가 많으면 시간이 걸릴 수 있습니다.`))return;
+ try{
+  const d=await req("/api/admin/log-security/migrate",{method:"POST",body:JSON.stringify({action})});
+  showSecurity(d.log_security);
+  alert(`${label}했습니다. 서비스 ${d.result.service_rows_changed}개 / 사용자 ${d.result.audit_rows_changed}개 변경`);
+  location.reload();
+ }catch(e){alert(e.message)}
+}
+document.getElementById("encryptExistingBtn")?.addEventListener("click",()=>migrateLogs("encrypt"));
+document.getElementById("decryptExistingBtn")?.addEventListener("click",()=>migrateLogs("decrypt"));
+
 loadUsers();
 </script>
 </body>

@@ -12,3 +12,4 @@ ntplib==0.4.0
 tzdata>=2024.1
 python-pptx==1.0.2
 turso_serverless>=0.1,<0.2
+cryptography>=44

@@ -43,7 +43,7 @@ _HEALTH_CACHE = {"at": 0.0, "models": []}
 
 def ollama_health(force=False):
     now = time.monotonic()
-    if not force and _HEALTH_CACHE["models"] and (now - _HEALTH_CACHE["at"]) < 30:
+    if not force and _HEALTH_CACHE["models"] and (now - _HEALTH_CACHE["at"]) < 90:
         return list(_HEALTH_CACHE["models"])
     data = _json_request("/api/tags", timeout=6)
     models = [m.get("name") for m in data.get("models", []) if m.get("name")]
@@ -81,9 +81,9 @@ class PickOllamaLLM:
     def _prompt(self, text, state=None, history=None, web_context=''):
         state = state or {}
         history = history or []
-        recent = history[-12:]
+        recent = history[-8:]
         history_text = "\n".join(
-            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {str(h.get('content',''))[-800:]}"
+            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {str(h.get('content',''))[-500:]}"
             for h in recent
         )
         summary = state.get("summary", "현재 진행 중인 작업 없음")
@@ -131,6 +131,9 @@ PICK 정체성:
 - PICK을 ChatGPT 또는 OpenAI가 만든 서비스라고 사칭하지 않습니다.
 - 네이버가 PICK을 만들었다고 말하지 않습니다.
 - 제작자나 회사 정보를 임의로 만들어내지 않습니다.
+- PICK의 운영 서버는 Windows MiniPC + Cloudflare Named Tunnel입니다.
+- PICK 운영, 배포, 복구에 Render를 사용하거나 다시 제안하지 않습니다.
+- 영구 데이터는 Turso를 사용하며 MiniPC에서 직접 서비스합니다.
 
 현재 작업 상태:
 {summary}
@@ -174,13 +177,13 @@ PICK:"""
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
-                    "keep_alive": "30m",
+                    "keep_alive": "60m",
                     "think": False,
                     "options": {
                         "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.40)),
                         "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
                         "num_ctx": 8192 if coding_mode else (6144 if (news_mode or person_mode) else 4096),
-                        "num_predict": 1200 if coding_mode else (900 if person_mode else (700 if news_mode else 460)),
+                        "num_predict": 900 if coding_mode else (650 if person_mode else (480 if news_mode else 320)),
                     }
                 }, timeout=self.timeout)
                 answer = str(data.get("response") or "").strip()
@@ -272,13 +275,13 @@ def stream_generate(prompt, model=None, timeout=300, is_cancelled=None):
             "model": selected,
             "prompt": prompt,
             "stream": True,
-            "keep_alive": "30m",
+            "keep_alive": "60m",
             "think": False,
             "options": {
                 "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.38)),
                 "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
                 "num_ctx": 8192 if coding_mode else (6144 if (news_mode or person_mode) else 4096),
-                "num_predict": 1200 if coding_mode else (900 if person_mode else (700 if news_mode else 420)),
+                "num_predict": 900 if coding_mode else (650 if person_mode else (480 if news_mode else 320)),
             },
         }
         req = urllib.request.Request(
