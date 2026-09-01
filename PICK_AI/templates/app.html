@@ -3,13 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="format-detection" content="telephone=no">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#212121">
   <title>PICK</title>
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <meta name="theme-color" content="#101010">
   <link rel="manifest" href="/static/manifest.webmanifest">
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=pick-question-v1011">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=pick-mobile-v1018">
 </head>
 <body>
 <div id="app">
@@ -353,6 +357,6 @@
 <input id="filePicker" type="file" hidden>
 <div id="toast" class="toast" role="status"></div>
 
-<script src="{{ url_for('static', filename='app.js') }}?v=pick-question-v1011"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=pick-mobile-v1018"></script>
 </body>
 </html>

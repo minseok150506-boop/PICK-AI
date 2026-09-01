@@ -5,6 +5,12 @@
   "display": "standalone",
   "background_color": "#101010",
   "theme_color": "#101010",
-  "description": "PICK AI - Synology + MiniPC AI service",
-  "icons": []
+  "description": "PICK AI - MiniPC + Cloudflare personal AI service",
+  "icons": [],
+  "id": "/",
+  "scope": "/",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ]
 }

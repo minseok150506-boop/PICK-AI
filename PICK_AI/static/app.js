@@ -390,7 +390,11 @@ function pollBackgroundJob(jobId, chatId) {
       const job = data.job || {};
       if (Number(state.currentChatId) === Number(chatId)) {
         mergeBackgroundJobs([job]);
-        renderMessages(false);
+        if (window.pickRenderBackgroundJob) {
+          window.pickRenderBackgroundJob(job);
+        } else {
+          renderMessages(false);
+        }
       }
       if (["done", "failed", "cancelled"].includes(job.status)) {
         delete state.jobPollers[key];
@@ -399,7 +403,7 @@ function pollBackgroundJob(jobId, chatId) {
         updateSendButtons();
         return;
       }
-      setTimeout(tick, 1200);
+      setTimeout(tick, window.pickJobPollDelay ? window.pickJobPollDelay() : 1200);
     } catch (_) {
       setTimeout(tick, 1000);
     }
@@ -1606,3 +1610,129 @@ document.addEventListener("click", e => {
     $("questionPreview")?.classList.add("hidden");
   }
 });
+
+/* ==========================================================
+   PICK MOBILE V10.18
+   Visual viewport + lightweight job rendering
+   ========================================================== */
+(function pickMobileV1018() {
+  if (window.__pickMobileV1018) return;
+  window.__pickMobileV1018 = true;
+
+  const widthQuery = window.matchMedia("(max-width: 820px)");
+  const coarseQuery = window.matchMedia("(hover: none) and (pointer: coarse)");
+
+  function isMobile() {
+    return Boolean(
+      widthQuery.matches ||
+      (coarseQuery.matches && window.innerWidth <= 1100)
+    );
+  }
+
+  window.pickIsMobileDevice = isMobile;
+  window.pickJobPollDelay = function () {
+    return isMobile() ? 1800 : 1200;
+  };
+
+  function syncViewport() {
+    const body = document.body;
+    if (!body) return;
+
+    const mobile = isMobile();
+    body.classList.toggle("pick-mobile-ui", mobile);
+
+    const vv = window.visualViewport;
+    const height = Math.max(
+      320,
+      Math.round((vv && vv.height) || window.innerHeight || 0)
+    );
+    document.documentElement.style.setProperty(
+      "--pick-mobile-height",
+      `${height}px`
+    );
+
+    const full = Math.round(window.innerHeight || height);
+    body.classList.toggle(
+      "pick-keyboard-open",
+      mobile && full - height > 120
+    );
+  }
+
+  function attach() {
+    syncViewport();
+
+    window.addEventListener("resize", syncViewport, {passive: true});
+    window.addEventListener("orientationchange", () => {
+      setTimeout(syncViewport, 120);
+      setTimeout(syncViewport, 420);
+    }, {passive: true});
+
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", syncViewport, {passive: true});
+      window.visualViewport.addEventListener("scroll", syncViewport, {passive: true});
+    }
+
+    document.addEventListener("focusin", event => {
+      if (
+        isMobile() &&
+        event.target &&
+        event.target.matches("textarea,input,select")
+      ) {
+        document.body.classList.add("pick-keyboard-open");
+        setTimeout(syncViewport, 40);
+      }
+    });
+
+    document.addEventListener("focusout", () => {
+      setTimeout(syncViewport, 180);
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", attach, {once: true});
+  } else {
+    attach();
+  }
+
+  window.pickRenderBackgroundJob = function (job) {
+    if (!isMobile()) {
+      renderMessages(false);
+      return;
+    }
+
+    const id = Number(job && job.id);
+    const message = state.messages.find(
+      item => Number(item.__jobId) === id
+    );
+    if (!message) {
+      renderMessages(false);
+      return;
+    }
+
+    const index = state.messages.indexOf(message);
+    const row = document.querySelector(
+      `.message-row[data-message-index="${index}"]`
+    );
+    const content = row && row.querySelector(".message-content");
+
+    if (!row || !content) {
+      renderMessages(false);
+      return;
+    }
+
+    const box = document.getElementById("messageArea");
+    const nearBottom = box
+      ? (box.scrollHeight - box.scrollTop - box.clientHeight) < 180
+      : false;
+
+    content.innerHTML = markdown(message.content || "");
+
+    if (nearBottom && box) {
+      requestAnimationFrame(() => {
+        box.scrollTop = box.scrollHeight;
+      });
+    }
+
+    updateSendButtons();
+  };
+})();
