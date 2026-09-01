@@ -145,7 +145,7 @@ def _claim():
     finally: c.close()
 
 def _heartbeat(job_id,stop):
-    while not stop.wait(20):
+    while not stop.wait(45):
         try:
             c=connect(); c.execute("UPDATE chat_jobs SET updated_at=? WHERE id=? AND status='running'",(now(),job_id)); c.commit(); c.close()
         except Exception: pass
@@ -211,7 +211,7 @@ def start_worker(processor,after_complete=None):
 
                 job=_claim()
                 if not job:
-                    _wake_event.wait(2.0)
+                    _wake_event.wait(3.0)
                     _wake_event.clear()
                     continue
 
@@ -229,7 +229,7 @@ def start_worker(processor,after_complete=None):
                 def cancel_check(force=False):
                     nonlocal last_cancel_at,cancel_cached
                     current=time.monotonic()
-                    if force or current-last_cancel_at>=0.35:
+                    if force or current-last_cancel_at>=0.80:
                         cancel_cached=is_cancel_requested(job["id"])
                         last_cancel_at=current
                     return cancel_cached
@@ -243,7 +243,7 @@ def start_worker(processor,after_complete=None):
                         if cancel_check():
                             raise JobCancelled()
                         current=time.monotonic()
-                        if last_partial_at and current-last_partial_at<0.45:
+                        if last_partial_at and current-last_partial_at<1.50:
                             return
                         update_partial(job["id"],text,**kwargs)
                         last_partial_at=current

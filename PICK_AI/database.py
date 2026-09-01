@@ -276,7 +276,6 @@ def connect():
                 auth_token=_TURSO_TOKEN,
             )
             wrapped = RemoteConnection(raw)
-            wrapped.execute("SELECT 1").fetchone()
             _LAST_DB_ERROR = ""
             _LAST_DB_MODE = "turso-serverless"
             return wrapped

@@ -81,9 +81,9 @@ class PickOllamaLLM:
     def _prompt(self, text, state=None, history=None, web_context=''):
         state = state or {}
         history = history or []
-        recent = history[-8:]
+        recent = history[-6:]
         history_text = "\n".join(
-            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {str(h.get('content',''))[-500:]}"
+            f"{'사용자' if h.get('role') == 'user' else 'PICK'}: {str(h.get('content',''))[-350:]}"
             for h in recent
         )
         summary = state.get("summary", "현재 진행 중인 작업 없음")
@@ -177,13 +177,13 @@ PICK:"""
                     "model": model,
                     "prompt": prompt,
                     "stream": False,
-                    "keep_alive": "60m",
+                    "keep_alive": "120m",
                     "think": False,
                     "options": {
                         "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.40)),
                         "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
-                        "num_ctx": 8192 if coding_mode else (6144 if (news_mode or person_mode) else 4096),
-                        "num_predict": 900 if coding_mode else (650 if person_mode else (480 if news_mode else 320)),
+                        "num_ctx": 6144 if coding_mode else (5120 if person_mode else (4096 if news_mode else 3072)),
+                        "num_predict": 800 if coding_mode else (560 if person_mode else (400 if news_mode else 240)),
                     }
                 }, timeout=self.timeout)
                 answer = str(data.get("response") or "").strip()
@@ -275,13 +275,13 @@ def stream_generate(prompt, model=None, timeout=300, is_cancelled=None):
             "model": selected,
             "prompt": prompt,
             "stream": True,
-            "keep_alive": "60m",
+            "keep_alive": "120m",
             "think": False,
             "options": {
                 "temperature": 0.14 if coding_mode else (0.22 if person_mode else (0.24 if news_mode else 0.38)),
                 "top_p": 0.88 if coding_mode else (0.89 if person_mode else (0.90 if news_mode else 0.92)),
-                "num_ctx": 8192 if coding_mode else (6144 if (news_mode or person_mode) else 4096),
-                "num_predict": 900 if coding_mode else (650 if person_mode else (480 if news_mode else 320)),
+                "num_ctx": 6144 if coding_mode else (5120 if person_mode else (4096 if news_mode else 3072)),
+                "num_predict": 800 if coding_mode else (560 if person_mode else (400 if news_mode else 240)),
             },
         }
         req = urllib.request.Request(
